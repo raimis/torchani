@@ -83,6 +83,12 @@ def load_sae(filename):
     return EnergyShifter(self_energies)
 
 
+class CELU(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x):
+        return 0.1 * torch.nn.functional.elu(x / 0.1, alpha=1)
+
 def _get_activation(activation_index):
     # Activation defined in:
     # https://github.com/Jussmith01/NeuroChem/blob/stable1/src-atomicnnplib/cunetwork/cuannlayer_t.cu#L920
@@ -91,7 +97,8 @@ def _get_activation(activation_index):
     elif activation_index == 5:  # Gaussian
         return Gaussian()
     elif activation_index == 9:  # CELU
-        return torch.nn.CELU(alpha=0.1)
+        #return torch.nn.CELU(alpha=0.1)
+        return CELU() # Remove after https://github.com/onnx/onnx/pull/2575 is available
     else:
         raise NotImplementedError(
             'Unexpected activation {}'.format(activation_index))
