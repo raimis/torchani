@@ -421,6 +421,97 @@ class AEVComputer_fast(AEVComputer):
     def __init__(self, Rcr, Rca, EtaR, ShfR, EtaA, Zeta, ShfA, ShfZ, num_species):
         super().__init__(Rcr, Rca, EtaR, ShfR, EtaA, Zeta, ShfA, ShfZ, num_species)
 
+
+    def compute_angular_aev(self, distances, vectors, species):
+
+        assert len(distances.shape) == 2
+        assert distances.shape[0] == distances.shape[1]
+
+        assert len(vectors.shape) == 3
+        assert vectors.shape[0] == vectors.shape[1]
+        assert vectors.shape[0] == distances.shape[0]
+        assert vectors.shape[2] == 3
+
+        assert len(species.shape) == 1
+        assert species.shape[0] == distances.shape[0]
+
+        num_atoms = vectors.shape[0]
+        num_species_pairs = self.angular_length // self.angular_sublength
+
+        # Compute mean distance tensor
+        dist1 = distances.reshape((num_atoms, 1, num_atoms, 1, 1))
+        dist2 = distances.reshape((num_atoms, num_atoms, 1, 1, 1))
+        mean_dists = 0.5 * (dist1 + dist2)
+
+        # Compute angle tensor
+        vec1 = vectors.reshape((num_atoms, 1, num_atoms, 3))
+        vec2 = vectors.reshape((num_atoms, num_atoms, 1, 3))
+        angles = torch.nn.functional.cosine_similarity(vec1, vec2, dim=3)
+        angles = torch.acos(0.95 * angles)
+        angles = angles.reshape((num_atoms, num_atoms, num_atoms, 1, 1))
+
+        # Compute the factors
+        assert len(self.ShfZ.shape) == 4
+        assert self.ShfZ.shape[0] == 1
+        assert self.ShfZ.shape[1] == 1
+        assert self.ShfZ.shape[2] == 1
+        assert self.ShfZ.shape[3] == 8
+        assert len(self.Zeta.shape) == 4
+        assert self.Zeta.shape[0] == 1
+        assert self.Zeta.shape[1] == 1
+        assert self.Zeta.shape[2] == 1
+        assert self.Zeta.shape[3] == 1
+        assert len(self.EtaA.shape) == 4
+        assert self.EtaA.shape[0] == 1
+        assert self.EtaA.shape[1] == 1
+        assert self.EtaA.shape[2] == 1
+        assert self.EtaA.shape[3] == 1
+        assert len(self.ShfA.shape) == 4
+        assert self.ShfA.shape[0] == 1
+        assert self.ShfA.shape[1] == 1
+        assert self.ShfA.shape[2] == 4
+        assert self.ShfA.shape[3] == 1
+        factor1 = (0.5 * (1 + torch.cos(angles - self.ShfZ[0, 0]))) ** float(self.Zeta)
+        factor2 = torch.exp(float(-self.EtaA[0, 0]) * (mean_dists - self.ShfA[0,0]) ** 2)
+
+        # Compute cutoff tensor
+        cutoff = cutoff_cosine(distances, self.Rca)
+        cutoff = cutoff.reshape((num_atoms, 1, num_atoms, 1, 1)) *\
+                 cutoff.reshape((num_atoms, num_atoms, 1, 1, 1))
+
+        # Compute terms
+        terms = factor1 * factor2 * cutoff
+        terms = terms.reshape((num_atoms, num_atoms, num_atoms, self.angular_sublength))
+
+        # Filter valid terms
+        valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0)       &\
+                (distances.reshape((num_atoms, 1, num_atoms, 1)) != 0.0)       &\
+                (distances.reshape((num_atoms, num_atoms, 1, 1)) != 0.0)       &\
+                (distances.reshape((num_atoms, 1, num_atoms, 1)) < self.Rca) &\
+                (distances.reshape((num_atoms, num_atoms, 1, 1)) < self.Rca)
+        zero = torch.tensor([0], dtype=terms.dtype)
+        terms = torch.where(valid, terms, zero)
+
+        # Construct mapping matrix
+        assert len(self.triu_index.shape) == 2
+        assert self.triu_index.shape[0] == self.num_species
+        mapping = np.zeros((num_atoms, num_atoms, self.angular_sublength,
+                            num_species_pairs, self.angular_sublength), dtype=np.float32)
+        for i1, s1 in enumerate(species.numpy()):
+            for i2, s2 in enumerate(species.numpy()):
+                for i in range(self.angular_sublength):
+                    mapping[i1, i2, i, self.triu_index[s1, s2], i] = 1
+        mapping = mapping.reshape(((num_atoms ** 2 * self.angular_sublength,
+                                    num_species_pairs * self.angular_sublength)))
+        mapping = torch.tensor(mapping)
+
+        # Compute angular AEV
+        terms = terms.reshape(num_atoms, num_atoms ** 2 * self.angular_sublength)
+        angular_aev = torch.matmul(terms, mapping)
+
+        return angular_aev
+
+
     def compute_aev(self, species: Tensor, coordinates: Tensor, cell: Tensor,
                     shifts: Tensor, triu_index: Tensor,
                     constants: Tuple[float, Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor],
@@ -460,54 +551,12 @@ class AEVComputer_fast(AEVComputer):
 
         radial_aev_ = torch.matmul(radial_terms_.reshape(num_atoms, num_atoms * self.radial_sublength), radial_mapping)
 
-        vectors1 = vectors.reshape((num_atoms, 1, num_atoms, 3))
-        vectors2 = vectors.reshape((num_atoms, num_atoms, 1, 3))
-        angles = torch.nn.functional.cosine_similarity(vectors1, vectors2, dim=3)
-        angles = torch.acos(0.95 * angles)
-        angles = angles.reshape((num_atoms, num_atoms, num_atoms, 1, 1))
-
-        factor1 = ((1 + torch.cos(angles - self.ShfZ[0,0])) / 2) ** float(self.Zeta)
-
-        dist1 = distances.reshape((num_atoms, 1, num_atoms, 1, 1))
-        dist2 = distances.reshape((num_atoms, num_atoms, 1, 1, 1))
-        mean_dists = (dist1 + dist2) / 2
-
-        factor2 = torch.exp(float(-self.EtaA) * (mean_dists - self.ShfA[0,0]) ** 2)
-
-        cutoff_ = cutoff_cosine(distances, self.Rca)
-        cutoff1 = cutoff_.reshape((num_atoms, 1, num_atoms, 1, 1))
-        cutoff2 = cutoff_.reshape((num_atoms, num_atoms, 1, 1, 1))
-        cutoff = cutoff1 * cutoff2
-
-        angular_terms_ = factor1 * factor2 * cutoff
-        angular_terms_ = angular_terms_.reshape((num_atoms, num_atoms, num_atoms, self.angular_sublength))
-
-        # Filter valid terms
-        valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0)       &\
-                (distances.reshape((num_atoms, 1, num_atoms, 1)) != 0.0)       &\
-                (distances.reshape((num_atoms, num_atoms, 1, 1)) != 0.0)       &\
-                (distances.reshape((num_atoms, 1, num_atoms, 1)) < float(Rca)) &\
-                (distances.reshape((num_atoms, num_atoms, 1, 1)) < float(Rca))
-        zero = torch.tensor([0], dtype=angular_terms_.dtype)
-        angular_terms_ = torch.where(valid, angular_terms_, zero)
-
-        # Accumulate terms
-        angular_mapping = np.zeros((num_atoms, num_atoms, self.angular_sublength,
-                                    num_species_pairs, self.angular_sublength), dtype=np.float32)
-        for i1, s1 in enumerate(species.numpy()):
-            for i2, s2 in enumerate(species.numpy()):
-                for i in range(self.angular_sublength):
-                    angular_mapping[i1, i2, i, triu_index[s1, s2], i] = 1
-        angular_mapping = angular_mapping.reshape(((num_atoms ** 2 * self.angular_sublength, num_species_pairs * self.angular_sublength)))
-        angular_mapping = torch.tensor(angular_mapping)
-
-        angular_terms_ = angular_terms_.reshape(num_atoms, num_atoms ** 2 * self.angular_sublength)
-        angular_aev_ = torch.matmul(angular_terms_, angular_mapping)
+        angular_aev = self.compute_angular_aev(distances, vectors, species)
 
         radial_aev_ = radial_aev_.reshape((1, num_atoms, self.radial_length))
-        angular_aev_ = angular_aev_.reshape((1, num_atoms, self.angular_length))
+        angular_aev = angular_aev.reshape((1, num_atoms, self.angular_length))
 
-        return torch.cat([radial_aev_, angular_aev_], dim=2)
+        return torch.cat([radial_aev_, angular_aev], dim=2)
 
     def forward(self, input_: Tuple[Tensor, Tensor], cell=None, pbc=None) -> SpeciesAEV:
 
