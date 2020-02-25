@@ -421,6 +421,49 @@ class AEVComputer_fast(AEVComputer):
     def __init__(self, Rcr, Rca, EtaR, ShfR, EtaA, Zeta, ShfA, ShfZ, num_species):
         super().__init__(Rcr, Rca, EtaR, ShfR, EtaA, Zeta, ShfA, ShfZ, num_species)
 
+    def compute_radial_aev(self, distances, species):
+
+        assert len(distances.shape) == 2
+        assert distances.shape[0] == distances.shape[1]
+
+        assert len(species.shape) == 1
+        assert species.shape[0] == distances.shape[0]
+
+        num_atoms = distances.shape[0]
+
+        # Compute cutoff matrix
+        cutoff = cutoff_cosine(distances, self.Rcr)
+        cutoff = cutoff.reshape((num_atoms, num_atoms, 1))
+
+        # Compute radial terms
+        assert len(self.EtaR.shape) == 2
+        assert self.EtaR.shape[0] == 1
+        assert self.EtaR.shape[1] == 1
+        assert len(self.ShfR.shape) == 2
+        assert self.ShfR.shape[0] == 1
+        assert self.ShfR.shape[1] == 16
+        dists = distances.reshape((num_atoms, num_atoms, 1))
+        terms = 0.25 * torch.exp(float(-self.EtaR) * (dists - self.ShfR[0]) ** 2) * cutoff
+
+        # Filter valid terms
+        valid = (distances.reshape(num_atoms, num_atoms, 1) != 0.0) &\
+                (distances.reshape(num_atoms, num_atoms, 1) < self.Rcr)
+        zero = torch.tensor([0], dtype=terms.dtype)
+        terms = torch.where(valid, terms, zero)
+
+        # Construct mapping matrix
+        mapping = np.zeros((num_atoms, self.radial_sublength, self.num_species, self.radial_sublength), dtype=np.float32)
+        for i1, s1 in enumerate(species.numpy()):
+            for i in range(self.radial_sublength):
+                mapping[i1, i, s1, i] = 1
+        mapping = mapping.reshape(((num_atoms * self.radial_sublength, self.radial_length)))
+        mapping = torch.tensor(mapping)
+
+        # Compute radial AEV
+        terms = terms.reshape(num_atoms, num_atoms * self.radial_sublength)
+        radial_aev = torch.matmul(terms, mapping)
+
+        return radial_aev
 
     def compute_angular_aev(self, distances, vectors, species):
 
@@ -435,7 +478,7 @@ class AEVComputer_fast(AEVComputer):
         assert len(species.shape) == 1
         assert species.shape[0] == distances.shape[0]
 
-        num_atoms = vectors.shape[0]
+        num_atoms = distances.shape[0]
         num_species_pairs = self.angular_length // self.angular_sublength
 
         # Compute mean distance tensor
@@ -536,27 +579,13 @@ class AEVComputer_fast(AEVComputer):
         vectors = coordinates.reshape((num_atoms, 1, 3)) - coordinates.reshape((1, num_atoms, 3))
         distances = vectors.norm(2, dim=2)
 
-        radial_terms_ = radial_terms(self.Rcr, self.EtaR, self.ShfR, distances.flatten())
-        radial_terms_ = radial_terms_.reshape((num_atoms, num_atoms, self.radial_sublength))
-
-        radial_terms_ = torch.where(distances.reshape(num_atoms, num_atoms, 1) != 0.0, radial_terms_, torch.tensor([0], dtype=radial_terms_.dtype))
-        radial_terms_ = torch.where(distances.reshape(num_atoms, num_atoms, 1) < Rcr, radial_terms_, torch.tensor([0], dtype=radial_terms_.dtype))
-
-        radial_mapping = np.zeros((num_atoms, self.radial_sublength, self.num_species, self.radial_sublength), dtype=np.float32)
-        for i1, s1 in enumerate(species.numpy()):
-            for i in range(self.radial_sublength):
-                radial_mapping[i1, i, s1, i] = 1
-        radial_mapping = radial_mapping.reshape(((num_atoms * self.radial_sublength, self.radial_length)))
-        radial_mapping = torch.tensor(radial_mapping)
-
-        radial_aev_ = torch.matmul(radial_terms_.reshape(num_atoms, num_atoms * self.radial_sublength), radial_mapping)
-
+        radial_aev = self.compute_radial_aev(distances, species)
         angular_aev = self.compute_angular_aev(distances, vectors, species)
 
-        radial_aev_ = radial_aev_.reshape((1, num_atoms, self.radial_length))
+        radial_aev = radial_aev.reshape((1, num_atoms, self.radial_length))
         angular_aev = angular_aev.reshape((1, num_atoms, self.angular_length))
 
-        return torch.cat([radial_aev_, angular_aev], dim=2)
+        return torch.cat([radial_aev, angular_aev], dim=2)
 
     def forward(self, input_: Tuple[Tensor, Tensor], cell=None, pbc=None) -> SpeciesAEV:
 
