@@ -418,8 +418,8 @@ class AEVComputer(torch.nn.Module):
 
 class AEVComputer_fast(AEVComputer):
 
-    def __init__(self, Rcr, Rca, EtaR, ShfR, EtaA, Zeta, ShfA, ShfZ, num_species):
-        super().__init__(Rcr, Rca, EtaR, ShfR, EtaA, Zeta, ShfA, ShfZ, num_species)
+    def __init__(self, **args):
+        super().__init__(**args)
 
     def compute_cutoff(self, distances, cutoff):
 
