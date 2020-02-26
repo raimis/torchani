@@ -554,48 +554,35 @@ class AEVComputer_fast(AEVComputer):
 
         return angular_aev
 
-
-    def compute_aev(self, species: Tensor, coordinates: Tensor, cell: Tensor,
-                    shifts: Tensor, triu_index: Tensor,
-                    constants: Tuple[float, Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor],
-                    sizes: Tuple[int, int, int, int, int]) -> Tensor:
-
-        assert len(coordinates.shape) == 3
-        assert coordinates.shape[0] == 1
-        assert coordinates.shape[2] == 3
-        coordinates = coordinates[0]
-
-        assert len(species.shape) == 2
-        assert species.shape[0] == 1
-        assert species.shape[1] == coordinates.shape[0]
-        species = species[0]
-
-        Rcr, EtaR, ShfR, Rca, ShfZ, EtaA, Zeta, ShfA = constants
-        num_species, radial_sublength, radial_length, angular_sublength, angular_length = sizes
-        num_atoms = species.shape[0]
-        num_species_pairs = angular_length // angular_sublength
-
-        # Compute distance matrix
-        vectors = coordinates.reshape((num_atoms, 1, 3)) - coordinates.reshape((1, num_atoms, 3))
-        distances = vectors.norm(2, dim=2)
-
-        radial_aev = self.compute_radial_aev(distances, species)
-        angular_aev = self.compute_angular_aev(distances, vectors, species)
-
-        radial_aev = radial_aev.reshape((1, num_atoms, self.radial_length))
-        angular_aev = angular_aev.reshape((1, num_atoms, self.angular_length))
-
-        return torch.cat([radial_aev, angular_aev], dim=2)
-
     def forward(self, input_: Tuple[Tensor, Tensor], cell=None, pbc=None) -> SpeciesAEV:
+
+        species_, coordinates_ = input_
+
+        assert len(species_.shape) == 2
+        assert species_.shape[0] == 1
+        species = species_[0]
+
+        assert len(coordinates_.shape) == 3
+        assert coordinates_.shape[0] == 1
+        assert coordinates_.shape[1] == species_.shape[1]
+        assert coordinates_.shape[2] == 3
+        coordinates = coordinates_[0]
 
         assert cell is None
         assert pbc is None
 
-        species, coordinates = input_
-        cell = self.default_cell
-        shifts = self.default_shifts
+        num_atoms = coordinates.shape[0]
 
-        aev = self.compute_aev(species, coordinates, cell, shifts, self.triu_index, self.constants(), self.sizes)
+        # Compute vector and distance matrices
+        vectors = coordinates.reshape((num_atoms, 1, 3)) - coordinates.reshape((1, num_atoms, 3))
+        distances = vectors.norm(2, dim=2)
 
-        return SpeciesAEV(species, aev)
+        # Compute AEV components
+        radial_aev = self.compute_radial_aev(distances, species)
+        angular_aev = self.compute_angular_aev(distances, vectors, species)
+
+        # Merge AEV components
+        aev = torch.cat([radial_aev, angular_aev], dim=1)
+        aev = aev.reshape((1, num_atoms, self.aev_length))
+
+        return SpeciesAEV(species_, aev)
