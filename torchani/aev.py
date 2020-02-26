@@ -431,13 +431,46 @@ class AEVComputer_fast(AEVComputer):
 
         return value
 
-    def compute_radial_aev(self, distances, species):
+    def construct_radial_mapping(self, species):
+
+        assert len(species.shape) == 1
+
+        num_atoms = species.shape[0]
+
+        mapping = np.zeros((num_atoms, self.radial_sublength, self.num_species, self.radial_sublength), dtype=np.float32)
+        for i1, s1 in enumerate(species.numpy()):
+            for i in range(self.radial_sublength):
+                mapping[i1, i, s1, i] = 1
+        mapping = mapping.reshape(((num_atoms * self.radial_sublength, self.radial_length)))
+
+        self.register_buffer('radial_mapping', torch.tensor(mapping))
+
+    def construct_angular_mapping(self, species):
+
+        assert len(species.shape) == 1
+
+        num_atoms = species.shape[0]
+        num_species_pairs = self.angular_length // self.angular_sublength
+
+        assert len(self.triu_index.shape) == 2
+        assert self.triu_index.shape[0] == self.num_species
+        assert self.triu_index.shape[1] == self.num_species
+
+        mapping = np.zeros((num_atoms, num_atoms, self.angular_sublength,
+                            num_species_pairs, self.angular_sublength), dtype=np.float32)
+        for i1, s1 in enumerate(species.numpy()):
+            for i2, s2 in enumerate(species.numpy()):
+                for i in range(self.angular_sublength):
+                    mapping[i1, i2, i, self.triu_index[s1, s2], i] = 1
+        mapping = mapping.reshape(((num_atoms ** 2 * self.angular_sublength,
+                                    num_species_pairs * self.angular_sublength)))
+
+        self.register_buffer('angular_mapping', torch.tensor(mapping))
+
+    def compute_radial_aev(self, distances):
 
         assert len(distances.shape) == 2
         assert distances.shape[0] == distances.shape[1]
-
-        assert len(species.shape) == 1
-        assert species.shape[0] == distances.shape[0]
 
         num_atoms = distances.shape[0]
         distances = distances.reshape((num_atoms, num_atoms, 1))
@@ -452,28 +485,19 @@ class AEVComputer_fast(AEVComputer):
         assert len(self.ShfR.shape) == 2
         assert self.ShfR.shape[0] == 1
         assert self.ShfR.shape[1] == 16
-        #dists = distances.reshape((num_atoms, num_atoms, 1))
         terms = 0.25 * torch.exp(float(-self.EtaR) * (distances - self.ShfR[0]) ** 2) * cutoff
 
         # Filter self-interaction terms
         zero = torch.tensor([0], dtype=terms.dtype)
         terms = torch.where(distances != 0.0, terms, zero)
 
-        # Construct mapping matrix
-        mapping = np.zeros((num_atoms, self.radial_sublength, self.num_species, self.radial_sublength), dtype=np.float32)
-        for i1, s1 in enumerate(species.numpy()):
-            for i in range(self.radial_sublength):
-                mapping[i1, i, s1, i] = 1
-        mapping = mapping.reshape(((num_atoms * self.radial_sublength, self.radial_length)))
-        mapping = torch.tensor(mapping)
-
         # Compute radial AEV
         terms = terms.reshape(num_atoms, num_atoms * self.radial_sublength)
-        radial_aev = torch.matmul(terms, mapping)
+        radial_aev = torch.matmul(terms, self.radial_mapping)
 
         return radial_aev
 
-    def compute_angular_aev(self, distances, vectors, species):
+    def compute_angular_aev(self, distances, vectors):
 
         assert len(distances.shape) == 2
         assert distances.shape[0] == distances.shape[1]
@@ -483,11 +507,7 @@ class AEVComputer_fast(AEVComputer):
         assert vectors.shape[0] == distances.shape[0]
         assert vectors.shape[2] == 3
 
-        assert len(species.shape) == 1
-        assert species.shape[0] == distances.shape[0]
-
         num_atoms = distances.shape[0]
-        num_species_pairs = self.angular_length // self.angular_sublength
 
         # Compute mean distance tensor
         dist1 = distances.reshape((num_atoms, 1, num_atoms, 1, 1))
@@ -540,23 +560,9 @@ class AEVComputer_fast(AEVComputer):
         zero = torch.tensor([0], dtype=terms.dtype)
         terms = torch.where(valid, terms, zero)
 
-        # Construct mapping matrix
-        assert len(self.triu_index.shape) == 2
-        assert self.triu_index.shape[0] == self.num_species
-        assert self.triu_index.shape[1] == self.num_species
-        mapping = np.zeros((num_atoms, num_atoms, self.angular_sublength,
-                            num_species_pairs, self.angular_sublength), dtype=np.float32)
-        for i1, s1 in enumerate(species.numpy()):
-            for i2, s2 in enumerate(species.numpy()):
-                for i in range(self.angular_sublength):
-                    mapping[i1, i2, i, self.triu_index[s1, s2], i] = 1
-        mapping = mapping.reshape(((num_atoms ** 2 * self.angular_sublength,
-                                    num_species_pairs * self.angular_sublength)))
-        mapping = torch.tensor(mapping)
-
         # Compute angular AEV
         terms = terms.reshape(num_atoms, num_atoms ** 2 * self.angular_sublength)
-        angular_aev = torch.matmul(terms, mapping)
+        angular_aev = torch.matmul(terms, self.angular_mapping)
 
         return angular_aev
 
@@ -579,13 +585,17 @@ class AEVComputer_fast(AEVComputer):
 
         num_atoms = coordinates.shape[0]
 
+        # Construct mapping matrices
+        self.construct_radial_mapping(species)
+        self.construct_angular_mapping(species)
+
         # Compute vector and distance matrices
         vectors = coordinates.reshape((num_atoms, 1, 3)) - coordinates.reshape((1, num_atoms, 3))
         distances = vectors.norm(2, dim=2)
 
         # Compute AEV components
-        radial_aev = self.compute_radial_aev(distances, species)
-        angular_aev = self.compute_angular_aev(distances, vectors, species)
+        radial_aev = self.compute_radial_aev(distances)
+        angular_aev = self.compute_angular_aev(distances, vectors)
 
         # Merge AEV components
         aev = torch.cat([radial_aev, angular_aev], dim=1)
