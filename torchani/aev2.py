@@ -14,7 +14,7 @@ class AEVComputer2(AEVComputer):
         assert type(cutoff) is float
 
         value = 0.5 * torch.cos(distances * (np.pi / cutoff)) + 0.5
-        zero = torch.tensor([0], dtype=value.dtype)
+        zero = torch.tensor([0], dtype=value.dtype, device=value.device)
         value = torch.where(distances < cutoff, value, zero)
 
         return value
@@ -26,12 +26,12 @@ class AEVComputer2(AEVComputer):
         num_atoms = species.shape[0]
 
         mapping = np.zeros((num_atoms, self.radial_sublength, self.num_species, self.radial_sublength), dtype=np.float32)
-        for i1, s1 in enumerate(species.numpy()):
+        for i1, s1 in enumerate(species.cpu().numpy()):
             for i in range(self.radial_sublength):
                 mapping[i1, i, s1, i] = 1
         mapping = mapping.reshape(((num_atoms * self.radial_sublength, self.radial_length)))
 
-        self.register_buffer('radial_mapping', torch.tensor(mapping))
+        self.register_buffer('radial_mapping', torch.tensor(mapping, device=species.device))
 
     def construct_angular_mapping(self, species):
 
@@ -46,14 +46,14 @@ class AEVComputer2(AEVComputer):
 
         mapping = np.zeros((num_atoms, num_atoms, self.angular_sublength,
                             num_species_pairs, self.angular_sublength), dtype=np.float32)
-        for i1, s1 in enumerate(species.numpy()):
-            for i2, s2 in enumerate(species.numpy()):
+        for i1, s1 in enumerate(species.cpu().numpy()):
+            for i2, s2 in enumerate(species.cpu().numpy()):
                 for i in range(self.angular_sublength):
                     mapping[i1, i2, i, self.triu_index[s1, s2], i] = 1
         mapping = mapping.reshape(((num_atoms ** 2 * self.angular_sublength,
                                     num_species_pairs * self.angular_sublength)))
 
-        self.register_buffer('angular_mapping', torch.tensor(mapping))
+        self.register_buffer('angular_mapping', torch.tensor(mapping, device=species.device))
 
     def compute_radial_aev(self, distances):
 
@@ -76,7 +76,7 @@ class AEVComputer2(AEVComputer):
         terms = 0.25 * torch.exp(float(-self.EtaR) * (distances - self.ShfR[0]) ** 2) * cutoff
 
         # Filter self-interaction terms
-        zero = torch.tensor([0], dtype=terms.dtype)
+        zero = torch.tensor([0], dtype=terms.dtype, device=terms.device)
         terms = torch.where(distances != 0.0, terms, zero)
 
         # Compute radial AEV
@@ -145,7 +145,7 @@ class AEVComputer2(AEVComputer):
         valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0) &\
                 (distances.reshape((num_atoms, 1, num_atoms, 1)) != 0.0) &\
                 (distances.reshape((num_atoms, num_atoms, 1, 1)) != 0.0)
-        zero = torch.tensor([0], dtype=terms.dtype)
+        zero = torch.tensor([0], dtype=terms.dtype, device=terms.device)
         terms = torch.where(valid, terms, zero)
 
         # Compute angular AEV
