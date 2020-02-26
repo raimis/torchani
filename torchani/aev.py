@@ -440,10 +440,10 @@ class AEVComputer_fast(AEVComputer):
         assert species.shape[0] == distances.shape[0]
 
         num_atoms = distances.shape[0]
+        distances = distances.reshape((num_atoms, num_atoms, 1))
 
         # Compute cutoff matrix
         cutoff = self.compute_cutoff(distances, self.Rcr)
-        cutoff = cutoff.reshape((num_atoms, num_atoms, 1))
 
         # Compute radial terms
         assert len(self.EtaR.shape) == 2
@@ -452,13 +452,12 @@ class AEVComputer_fast(AEVComputer):
         assert len(self.ShfR.shape) == 2
         assert self.ShfR.shape[0] == 1
         assert self.ShfR.shape[1] == 16
-        dists = distances.reshape((num_atoms, num_atoms, 1))
-        terms = 0.25 * torch.exp(float(-self.EtaR) * (dists - self.ShfR[0]) ** 2) * cutoff
+        #dists = distances.reshape((num_atoms, num_atoms, 1))
+        terms = 0.25 * torch.exp(float(-self.EtaR) * (distances - self.ShfR[0]) ** 2) * cutoff
 
         # Filter self-interaction terms
-        valid = distances.reshape(num_atoms, num_atoms, 1) != 0.0
         zero = torch.tensor([0], dtype=terms.dtype)
-        terms = torch.where(valid, terms, zero)
+        terms = torch.where(distances != 0.0, terms, zero)
 
         # Construct mapping matrix
         mapping = np.zeros((num_atoms, self.radial_sublength, self.num_species, self.radial_sublength), dtype=np.float32)
