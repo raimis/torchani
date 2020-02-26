@@ -421,6 +421,16 @@ class AEVComputer_fast(AEVComputer):
     def __init__(self, Rcr, Rca, EtaR, ShfR, EtaA, Zeta, ShfA, ShfZ, num_species):
         super().__init__(Rcr, Rca, EtaR, ShfR, EtaA, Zeta, ShfA, ShfZ, num_species)
 
+    def compute_cutoff(self, distances, cutoff):
+
+        assert type(cutoff) is float
+
+        value = 0.5 * torch.cos(distances * (np.pi / cutoff)) + 0.5
+        zero = torch.tensor([0], dtype=value.dtype)
+        value = torch.where(distances < cutoff, value, zero)
+
+        return value
+
     def compute_radial_aev(self, distances, species):
 
         assert len(distances.shape) == 2
@@ -432,7 +442,7 @@ class AEVComputer_fast(AEVComputer):
         num_atoms = distances.shape[0]
 
         # Compute cutoff matrix
-        cutoff = cutoff_cosine(distances, self.Rcr)
+        cutoff = self.compute_cutoff(distances, self.Rcr)
         cutoff = cutoff.reshape((num_atoms, num_atoms, 1))
 
         # Compute radial terms
@@ -445,9 +455,8 @@ class AEVComputer_fast(AEVComputer):
         dists = distances.reshape((num_atoms, num_atoms, 1))
         terms = 0.25 * torch.exp(float(-self.EtaR) * (dists - self.ShfR[0]) ** 2) * cutoff
 
-        # Filter valid terms
-        valid = (distances.reshape(num_atoms, num_atoms, 1) != 0.0) &\
-                (distances.reshape(num_atoms, num_atoms, 1) < self.Rcr)
+        # Filter self-interaction terms
+        valid = distances.reshape(num_atoms, num_atoms, 1) != 0.0
         zero = torch.tensor([0], dtype=terms.dtype)
         terms = torch.where(valid, terms, zero)
 
@@ -518,7 +527,7 @@ class AEVComputer_fast(AEVComputer):
         factor2 = torch.exp(float(-self.EtaA[0, 0]) * (mean_dists - self.ShfA[0,0]) ** 2)
 
         # Compute cutoff tensor
-        cutoff = cutoff_cosine(distances, self.Rca)
+        cutoff = self.compute_cutoff(distances, self.Rca)
         cutoff = cutoff.reshape((num_atoms, 1, num_atoms, 1, 1)) *\
                  cutoff.reshape((num_atoms, num_atoms, 1, 1, 1))
 
@@ -526,18 +535,17 @@ class AEVComputer_fast(AEVComputer):
         terms = factor1 * factor2 * cutoff
         terms = terms.reshape((num_atoms, num_atoms, num_atoms, self.angular_sublength))
 
-        # Filter valid terms
-        valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0)       &\
-                (distances.reshape((num_atoms, 1, num_atoms, 1)) != 0.0)       &\
-                (distances.reshape((num_atoms, num_atoms, 1, 1)) != 0.0)       &\
-                (distances.reshape((num_atoms, 1, num_atoms, 1)) < self.Rca) &\
-                (distances.reshape((num_atoms, num_atoms, 1, 1)) < self.Rca)
+        # Filter self-interaction terms
+        valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0) &\
+                (distances.reshape((num_atoms, 1, num_atoms, 1)) != 0.0) &\
+                (distances.reshape((num_atoms, num_atoms, 1, 1)) != 0.0)
         zero = torch.tensor([0], dtype=terms.dtype)
         terms = torch.where(valid, terms, zero)
 
         # Construct mapping matrix
         assert len(self.triu_index.shape) == 2
         assert self.triu_index.shape[0] == self.num_species
+        assert self.triu_index.shape[1] == self.num_species
         mapping = np.zeros((num_atoms, num_atoms, self.angular_sublength,
                             num_species_pairs, self.angular_sublength), dtype=np.float32)
         for i1, s1 in enumerate(species.numpy()):
