@@ -60,7 +60,7 @@ class AEVComputer2(AEVComputer):
         assert len(distances.shape) == 2
         assert distances.shape[0] == distances.shape[1]
 
-        num_atoms = distances.shape[0]
+        num_atoms = int(distances.shape[0])
         distances = distances.reshape((num_atoms, num_atoms, 1))
 
         # Compute cutoff matrix
@@ -70,14 +70,16 @@ class AEVComputer2(AEVComputer):
         assert len(self.EtaR.shape) == 2
         assert self.EtaR.shape[0] == 1
         assert self.EtaR.shape[1] == 1
+        EtaR = float(self.EtaR)
         assert len(self.ShfR.shape) == 2
         assert self.ShfR.shape[0] == 1
         assert self.ShfR.shape[1] == 16
-        terms = 0.25 * torch.exp(float(-self.EtaR) * (distances - self.ShfR[0]) ** 2) * cutoff
+        ShfR = self.ShfR.reshape(16)
+        terms = 0.25 * torch.exp(-EtaR * (distances - ShfR) ** 2) * cutoff
 
         # Filter self-interaction terms
         zero = torch.tensor([0], dtype=terms.dtype, device=terms.device)
-        terms = torch.where(distances != 0.0, terms, zero)
+        terms = torch.where(distances == 0.0, zero, terms)
 
         # Compute radial AEV
         terms = terms.reshape(num_atoms, num_atoms * self.radial_sublength)
@@ -95,7 +97,7 @@ class AEVComputer2(AEVComputer):
         assert vectors.shape[0] == distances.shape[0]
         assert vectors.shape[2] == 3
 
-        num_atoms = distances.shape[0]
+        num_atoms = int(distances.shape[0])
 
         # Compute mean distance tensor
         dist1 = distances.reshape((num_atoms, 1, num_atoms, 1, 1))
@@ -119,23 +121,27 @@ class AEVComputer2(AEVComputer):
         assert self.ShfZ.shape[1] == 1
         assert self.ShfZ.shape[2] == 1
         assert self.ShfZ.shape[3] == 8
+        ShfZ = self.ShfZ.reshape((1, 8))
         assert len(self.Zeta.shape) == 4
         assert self.Zeta.shape[0] == 1
         assert self.Zeta.shape[1] == 1
         assert self.Zeta.shape[2] == 1
         assert self.Zeta.shape[3] == 1
+        Zeta = float(self.Zeta)
         assert len(self.EtaA.shape) == 4
         assert self.EtaA.shape[0] == 1
         assert self.EtaA.shape[1] == 1
         assert self.EtaA.shape[2] == 1
         assert self.EtaA.shape[3] == 1
+        EtaA = float(self.EtaA)
         assert len(self.ShfA.shape) == 4
         assert self.ShfA.shape[0] == 1
         assert self.ShfA.shape[1] == 1
         assert self.ShfA.shape[2] == 4
         assert self.ShfA.shape[3] == 1
-        factor1 = (0.5 * (1 + torch.cos(angles - self.ShfZ[0, 0]))) ** float(self.Zeta)
-        factor2 = torch.exp(float(-self.EtaA[0, 0]) * (mean_dists - self.ShfA[0,0]) ** 2)
+        ShfA = self.ShfA.reshape((4, 1))
+        factor1 = (0.5 * (1 + torch.cos(angles - ShfZ))) ** Zeta
+        factor2 = torch.exp(-EtaA * (mean_dists - ShfA) ** 2)
 
         # Compute cutoff tensor
         cutoff = self.compute_cutoff(distances, self.Rca)
@@ -147,11 +153,11 @@ class AEVComputer2(AEVComputer):
         terms = terms.reshape((num_atoms, num_atoms, num_atoms, self.angular_sublength))
 
         # Filter self-interaction terms
-        valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0) &\
-                (distances.reshape((num_atoms, 1, num_atoms, 1)) != 0.0) &\
-                (distances.reshape((num_atoms, num_atoms, 1, 1)) != 0.0)
+        valid = (distances.reshape((1, num_atoms, num_atoms, 1)) == 0.0) |\
+                (distances.reshape((num_atoms, 1, num_atoms, 1)) == 0.0) |\
+                (distances.reshape((num_atoms, num_atoms, 1, 1)) == 0.0)
         zero = torch.tensor([0], dtype=terms.dtype, device=terms.device)
-        terms = torch.where(valid, terms, zero)
+        terms = torch.where(valid, zero, terms)
 
         # Compute angular AEV
         terms = terms.reshape(num_atoms, num_atoms ** 2 * self.angular_sublength)
@@ -159,24 +165,25 @@ class AEVComputer2(AEVComputer):
 
         return angular_aev
 
-    def forward(self, input_, cell=None, pbc=None):
+    def forward(self, species_coordinates, cell=None, pbc=None):
 
-        species_, coordinates_ = input_
+        species_, coordinates_ = species_coordinates
 
         assert len(species_.shape) == 2
         assert species_.shape[0] == 1
-        species = species_[0]
+
 
         assert len(coordinates_.shape) == 3
         assert coordinates_.shape[0] == 1
         assert coordinates_.shape[1] == species_.shape[1]
         assert coordinates_.shape[2] == 3
-        coordinates = coordinates_[0]
 
         assert cell is None
         assert pbc is None
 
-        num_atoms = coordinates.shape[0]
+        num_atoms = int(species_.shape[1])
+        species = species_.reshape(num_atoms)
+        coordinates = coordinates_.reshape((num_atoms, 3))
 
         # Construct mapping matrices
         self.construct_radial_mapping(species)
