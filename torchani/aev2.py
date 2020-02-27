@@ -105,14 +105,9 @@ class AEVComputer2(AEVComputer):
         mean_dists = 0.5 * (dist1 + dist2)
 
         # Compute angle tensor
-        #vec1 = vectors.reshape((num_atoms, 1, num_atoms, 1, 1, 3))
-        #vec2 = vectors.reshape((num_atoms, num_atoms, 1, 1, 1, 3))
-        #angles = torch.nn.functional.cosine_similarity(vec1, vec2, dim=5)
-        #angles = torch.acos(0.95 * angles)
-
         vec1 = vectors.reshape((num_atoms, 1, num_atoms, 1, 3))
-        vec2 = vectors.reshape((num_atoms, num_atoms, 1, 3, 1))
-        similarity = torch.matmul(vec1, vec2)/(dist1 * dist2)
+        vec2 = vectors.reshape((num_atoms, num_atoms, 1, 1, 3))
+        similarity = torch.sum(vec1 * vec2, dim=4, keepdim=True)/(dist1 * dist2)
         angles = torch.acos(0.95 * similarity)
 
         # Compute the factors
