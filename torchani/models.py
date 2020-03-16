@@ -190,6 +190,35 @@ class BuiltinNet(torch.nn.Module):
             .to(self.aev_computer.ShfR.device)
 
 
+class BuiltinNet2(BuiltinNet):
+
+    def __init__(self, *args, **kwds):
+        super().__init__(*args, **kwds)
+
+    def forward(self, species_coordinates, cell=None, pbc=None):
+
+        assert cell is None
+        assert pbc is None
+
+        self._coordinates = species_coordinates[1]
+        if self.periodic_table_index:
+            species_coordinates = self.species_converter(species_coordinates)
+        species_aevs = self.aev_computer(species_coordinates, cell=cell, pbc=pbc)
+        self._aevs = species_aevs[1]
+        species_energies = self.neural_networks(species_aevs)
+        self._energies = species_energies[1]
+        return self.energy_shifter(species_energies)
+
+    def backward(self):
+
+        assert self._coordinates.requires_grad
+
+        grad_aevs = self.neural_networks.backward()
+        grad_coords = self.aev_computer.backward(grad_aevs)
+
+        return grad_coords
+
+
 class ANI1x(BuiltinNet):
     """The ANI-1x model as in `ani-1x_8x on GitHub`_ and `Active Learning Paper`_.
 
