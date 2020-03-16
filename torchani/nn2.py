@@ -67,6 +67,7 @@ class Ensemble2(Ensemble):
         assert len(aev_.shape) == 3
         assert aev_.shape[0] == 1
         assert aev_.shape[1] == species_.shape[1]
+        self._aevs = aev_
 
         num_atoms = int(species_.shape[1])
         num_ave = int(aev_.shape[2])
@@ -126,6 +127,12 @@ class Ensemble2(Ensemble):
                     vector += nn[6].bias
                     energies.append(vector.flatten())
         energies = torch.cat(energies)
-        energy = torch.sum(energies).reshape(1) / len(self)
+        self._energy = torch.sum(energies).reshape(1) / len(self)
 
-        return SpeciesEnergies(species_, energy)
+        return SpeciesEnergies(species_, self._energy)
+
+    def backward(self):
+
+        grad_aevs = torch.autograd.grad(self._energy, self._aevs, retain_graph=True)[0]
+
+        return grad_aevs
