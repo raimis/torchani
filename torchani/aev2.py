@@ -168,11 +168,11 @@ class AEVComputer2(AEVComputer):
         assert len(species_.shape) == 2
         assert species_.shape[0] == 1
 
-
         assert len(coordinates_.shape) == 3
         assert coordinates_.shape[0] == 1
         assert coordinates_.shape[1] == species_.shape[1]
         assert coordinates_.shape[2] == 3
+        self._coordinates = coordinates_
 
         assert cell is None
         assert pbc is None
@@ -195,6 +195,12 @@ class AEVComputer2(AEVComputer):
 
         # Merge AEV components
         aev = torch.cat([radial_aev, angular_aev], dim=1)
-        aev = aev.reshape((1, num_atoms, self.aev_length))
+        self._aevs = aev.reshape((1, num_atoms, self.aev_length))
 
-        return SpeciesAEV(species_, aev)
+        return SpeciesAEV(species_, self._aevs)
+
+    def backward(self, grad_aevs):
+
+        grad_coords = torch.autograd.grad(self._aevs, self._coordinates, grad_aevs, retain_graph=True)[0]
+
+        return grad_coords
