@@ -107,7 +107,8 @@ class AEVComputer2(AEVComputer):
         # Compute angle tensor
         vec1 = vectors.reshape((num_atoms, 1, num_atoms, 1, 3))
         vec2 = vectors.reshape((num_atoms, num_atoms, 1, 1, 3))
-        similarity = torch.sum(vec1 * vec2, dim=4, keepdim=True)/(dist1 * dist2)
+        epsilon = torch.tensor(1e-45, dtype=dist1.dtype, device=dist1.device)
+        similarity = torch.sum(vec1 * vec2, dim=4, keepdim=True)/torch.max(dist1 * dist2, epsilon)
         angles = torch.acos(0.95 * similarity)
 
         # Compute the factors
