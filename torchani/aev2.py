@@ -63,9 +63,6 @@ class AEVComputer2(AEVComputer):
         num_atoms = int(distances.shape[0])
         distances = distances.reshape((num_atoms, num_atoms, 1))
 
-        # Compute cutoff matrix
-        cutoff = self.compute_cutoff(distances, self.Rcr)
-
         # Compute radial terms
         assert len(self.EtaR.shape) == 2
         assert self.EtaR.shape[0] == 1
@@ -75,9 +72,12 @@ class AEVComputer2(AEVComputer):
         assert self.ShfR.shape[0] == 1
         assert self.ShfR.shape[1] == 16
         ShfR = self.ShfR.reshape(16)
-        terms = 0.25 * torch.exp(-EtaR * (distances - ShfR) ** 2) * cutoff
-
+        terms = 0.25 * torch.exp(-EtaR * (distances - ShfR) ** 2)
         self._aev_radial_terms = terms
+
+        # Scale terms
+        self._ave_radial_scale = self.compute_cutoff(distances, self.Rcr)
+        terms = terms * self._ave_radial_scale
 
         # Filter self-interaction terms
         self._aev_radial_valid = distances != 0.0
@@ -106,7 +106,12 @@ class AEVComputer2(AEVComputer):
         zero = torch.tensor([0], dtype=grad_terms.dtype, device=grad_terms.device)
         grad_terms = torch.where(self._aev_radial_valid, grad_terms, zero)
 
-        grad_coords = torch.autograd.grad(self._aev_radial_terms, self._coordinates, grad_terms, retain_graph=True)[0]
+        # Compte the gradient of scaling
+        terms = self._aev_radial_terms
+        scale = self._ave_radial_scale.repeat_interleave(self.radial_sublength, dim=2)
+        grad_coords_terms = torch.autograd.grad(terms, self._coordinates, scale*grad_terms, retain_graph=True)[0]
+        grad_coords_scale = torch.autograd.grad(scale, self._coordinates, terms*grad_terms, retain_graph=True)[0]
+        grad_coords = grad_coords_terms + grad_coords_scale
 
         return grad_coords
 
@@ -162,16 +167,16 @@ class AEVComputer2(AEVComputer):
         factor1 = (0.5 * (1 + torch.cos(angles - ShfZ))) ** Zeta
         factor2 = torch.exp(-EtaA * (mean_dists - ShfA) ** 2)
 
-        # Compute cutoff tensor
-        cutoff = self.compute_cutoff(distances, self.Rca)
-        cutoff = cutoff.reshape((num_atoms, 1, num_atoms, 1, 1)) *\
-                 cutoff.reshape((num_atoms, num_atoms, 1, 1, 1))
-
         # Compute terms
-        terms = factor1 * factor2 * cutoff
+        terms = factor1 * factor2
         terms = terms.reshape((num_atoms, num_atoms, num_atoms, self.angular_sublength))
-
         self._aev_angular_terms = terms
+
+        # Scale terms
+        self._aev_angular_scale = self.compute_cutoff(distances, self.Rca)
+        self._aev_angular_scale = self._aev_angular_scale.reshape((num_atoms, 1, num_atoms, 1)) *\
+                                  self._aev_angular_scale.reshape((num_atoms, num_atoms, 1, 1))
+        terms = terms * self._aev_angular_scale
 
         # Filter self-interaction terms
         self._aev_angular_valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0) &\
@@ -202,7 +207,12 @@ class AEVComputer2(AEVComputer):
         zero = torch.tensor([0], dtype=grad_terms.dtype, device=grad_terms.device)
         grad_terms = torch.where(self._aev_angular_valid, grad_terms, zero)
 
-        grad_coords = torch.autograd.grad(self._aev_angular_terms, self._coordinates, grad_terms, retain_graph=True)[0]
+        # Compte the gradient of scaling
+        terms = self._aev_angular_terms
+        scale = self._aev_angular_scale.repeat_interleave(self.angular_sublength, dim=3)
+        grad_coords_terms = torch.autograd.grad(terms, self._coordinates, scale*grad_terms, retain_graph=True)[0]
+        grad_coords_scale = torch.autograd.grad(scale, self._coordinates, terms*grad_terms, retain_graph=True)[0]
+        grad_coords = grad_coords_terms + grad_coords_scale
 
         return grad_coords
 
