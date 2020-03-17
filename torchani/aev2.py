@@ -171,12 +171,14 @@ class AEVComputer2(AEVComputer):
         terms = factor1 * factor2 * cutoff
         terms = terms.reshape((num_atoms, num_atoms, num_atoms, self.angular_sublength))
 
+        self._aev_angular_terms = terms
+
         # Filter self-interaction terms
-        valid = (distances.reshape((1, num_atoms, num_atoms, 1)) == 0.0) |\
-                (distances.reshape((num_atoms, 1, num_atoms, 1)) == 0.0) |\
-                (distances.reshape((num_atoms, num_atoms, 1, 1)) == 0.0)
+        self._aev_angular_valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0) &\
+                                  (distances.reshape((num_atoms, 1, num_atoms, 1)) != 0.0) &\
+                                  (distances.reshape((num_atoms, num_atoms, 1, 1)) != 0.0)
         zero = torch.tensor([0], dtype=terms.dtype, device=terms.device)
-        terms = torch.where(valid, zero, terms)
+        terms = torch.where(self._aev_angular_valid, terms, zero)
 
         # Compute angular AEV
         terms = terms.reshape(num_atoms, num_atoms ** 2 * self.angular_sublength)
@@ -192,7 +194,15 @@ class AEVComputer2(AEVComputer):
         assert grad_aev.shape[0] == num_atoms
         assert grad_aev.shape[1] == self.angular_length
 
-        grad_coords = torch.autograd.grad(self._aev_angular, self._coordinates, grad_aev, retain_graph=True)[0]
+        # Compute the gradient of radial AEV
+        grad_terms = torch.matmul(grad_aev, self.angular_mapping.t())
+        grad_terms = grad_terms.reshape((num_atoms, num_atoms, num_atoms, self.angular_sublength))
+
+        # Filter the gradient of self-interaction terms
+        zero = torch.tensor([0], dtype=grad_terms.dtype, device=grad_terms.device)
+        grad_terms = torch.where(self._aev_angular_valid, grad_terms, zero)
+
+        grad_coords = torch.autograd.grad(self._aev_angular_terms, self._coordinates, grad_terms, retain_graph=True)[0]
 
         return grad_coords
 
