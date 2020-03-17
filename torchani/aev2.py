@@ -55,15 +55,15 @@ class AEVComputer2(AEVComputer):
 
         self.register_buffer('angular_mapping', torch.tensor(mapping, device=species.device))
 
-    def compute_radial_aev(self, distances):
+    def compute_radial_terms(self, distances):
 
-        assert len(distances.shape) == 2
-        assert distances.shape[0] == distances.shape[1]
+        num_atoms = int(self._coordinates.shape[1])
 
-        num_atoms = int(distances.shape[0])
-        distances = distances.reshape((num_atoms, num_atoms, 1))
+        assert len(distances.shape) == 3
+        assert distances.shape[0] == num_atoms
+        assert distances.shape[1] == num_atoms
+        assert distances.shape[2] == 1
 
-        # Compute radial terms
         assert len(self.EtaR.shape) == 2
         assert self.EtaR.shape[0] == 1
         assert self.EtaR.shape[1] == 1
@@ -72,12 +72,27 @@ class AEVComputer2(AEVComputer):
         assert self.ShfR.shape[0] == 1
         assert self.ShfR.shape[1] == 16
         ShfR = self.ShfR.reshape(16)
+
+        # Compute radial terms
         terms = 0.25 * torch.exp(-EtaR * (distances - ShfR) ** 2)
-        self._aev_radial_terms = terms
+
+        return terms
+
+    def compute_radial_aev(self, distances):
+
+        num_atoms = int(self._coordinates.shape[1])
+
+        assert len(distances.shape) == 2
+        assert distances.shape[0] == num_atoms
+        assert distances.shape[1] == num_atoms
+
+        # Compute radial terms
+        distances = distances.reshape((num_atoms, num_atoms, 1))
+        self._aev_radial_terms = self.compute_radial_terms(distances)
 
         # Scale terms
         self._ave_radial_scale = self.compute_cutoff(distances, self.Rcr)
-        terms = terms * self._ave_radial_scale
+        terms = self._aev_radial_terms * self._ave_radial_scale
 
         # Filter self-interaction terms
         self._aev_radial_valid = distances != 0.0
@@ -115,31 +130,24 @@ class AEVComputer2(AEVComputer):
 
         return grad_coords
 
-    def compute_angular_aev(self, distances, vectors):
+    def compute_angular_terms(self, mean_distances, angles):
 
-        assert len(distances.shape) == 2
-        assert distances.shape[0] == distances.shape[1]
+        num_atoms = int(self._coordinates.shape[1])
 
-        assert len(vectors.shape) == 3
-        assert vectors.shape[0] == vectors.shape[1]
-        assert vectors.shape[0] == distances.shape[0]
-        assert vectors.shape[2] == 3
+        assert len(mean_distances.shape) == 5
+        assert mean_distances.shape[0] == num_atoms
+        assert mean_distances.shape[1] == num_atoms
+        assert mean_distances.shape[2] == num_atoms
+        assert mean_distances.shape[3] == 1
+        assert mean_distances.shape[4] == 1
 
-        num_atoms = int(distances.shape[0])
+        assert len(angles.shape) == 5
+        assert angles.shape[0] == num_atoms
+        assert angles.shape[1] == num_atoms
+        assert angles.shape[2] == num_atoms
+        assert angles.shape[3] == 1
+        assert angles.shape[4] == 1
 
-        # Compute mean distance tensor
-        dist1 = distances.reshape((num_atoms, 1, num_atoms, 1, 1))
-        dist2 = distances.reshape((num_atoms, num_atoms, 1, 1, 1))
-        mean_dists = 0.5 * (dist1 + dist2)
-
-        # Compute angle tensor
-        vec1 = vectors.reshape((num_atoms, 1, num_atoms, 1, 3))
-        vec2 = vectors.reshape((num_atoms, num_atoms, 1, 1, 3))
-        epsilon = torch.tensor(1e-45, dtype=dist1.dtype, device=dist1.device)
-        similarity = torch.sum(vec1 * vec2, dim=4, keepdim=True)/torch.max(dist1 * dist2, epsilon)
-        angles = torch.acos(0.95 * similarity)
-
-        # Compute the factors
         assert len(self.ShfZ.shape) == 4
         assert self.ShfZ.shape[0] == 1
         assert self.ShfZ.shape[1] == 1
@@ -164,19 +172,49 @@ class AEVComputer2(AEVComputer):
         assert self.ShfA.shape[2] == 4
         assert self.ShfA.shape[3] == 1
         ShfA = self.ShfA.reshape((4, 1))
+    
+        # Computer factors
         factor1 = (0.5 * (1 + torch.cos(angles - ShfZ))) ** Zeta
-        factor2 = torch.exp(-EtaA * (mean_dists - ShfA) ** 2)
+        factor2 = torch.exp(-EtaA * (mean_distances - ShfA) ** 2)
 
         # Compute terms
         terms = factor1 * factor2
         terms = terms.reshape((num_atoms, num_atoms, num_atoms, self.angular_sublength))
-        self._aev_angular_terms = terms
+
+        return terms
+
+    def compute_angular_aev(self, distances, vectors):
+
+        assert len(distances.shape) == 2
+        assert distances.shape[0] == distances.shape[1]
+
+        assert len(vectors.shape) == 3
+        assert vectors.shape[0] == vectors.shape[1]
+        assert vectors.shape[0] == distances.shape[0]
+        assert vectors.shape[2] == 3
+
+        num_atoms = int(distances.shape[0])
+
+        # Compute mean distance tensor
+        dist1 = distances.reshape((num_atoms, 1, num_atoms, 1, 1))
+        dist2 = distances.reshape((num_atoms, num_atoms, 1, 1, 1))
+        mean_distances = 0.5 * (dist1 + dist2)
+
+        # Compute angle tensor
+        vec1 = vectors.reshape((num_atoms, 1, num_atoms, 1, 3))
+        vec2 = vectors.reshape((num_atoms, num_atoms, 1, 1, 3))
+        epsilon = torch.tensor(1e-45, dtype=dist1.dtype, device=dist1.device)
+        similarity = torch.sum(vec1 * vec2, dim=4, keepdim=True)/torch.max(dist1 * dist2, epsilon)
+        angles = torch.acos(0.95 * similarity)
+
+        # Compute terms
+        self._aev_angular_terms = self.compute_angular_terms(mean_distances, angles)
 
         # Scale terms
         self._aev_angular_scale = self.compute_cutoff(distances, self.Rca)
         self._aev_angular_scale = self._aev_angular_scale.reshape((num_atoms, 1, num_atoms, 1)) *\
                                   self._aev_angular_scale.reshape((num_atoms, num_atoms, 1, 1))
-        terms = terms * self._aev_angular_scale
+        terms = self._aev_angular_terms * self._aev_angular_scale
 
         # Filter self-interaction terms
         self._aev_angular_valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0) &\
