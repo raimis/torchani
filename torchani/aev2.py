@@ -87,6 +87,18 @@ class AEVComputer2(AEVComputer):
 
         return radial_aev
 
+    def compute_grad_coords_radial(self, grad_aev):
+
+        num_atoms = int(self._coordinates.shape[1])
+
+        assert len(grad_aev.shape) == 2
+        assert grad_aev.shape[0] == num_atoms
+        assert grad_aev.shape[1] == self.radial_length
+
+        grad_coords = torch.autograd.grad(self._aev_radial, self._coordinates, grad_aev, retain_graph=True)[0]
+
+        return grad_coords
+
     def compute_angular_aev(self, distances, vectors):
 
         assert len(distances.shape) == 2
@@ -161,6 +173,18 @@ class AEVComputer2(AEVComputer):
 
         return angular_aev
 
+    def compute_grad_coords_angular(self, grad_aev):
+
+        num_atoms = int(self._coordinates.shape[1])
+
+        assert len(grad_aev.shape) == 2
+        assert grad_aev.shape[0] == num_atoms
+        assert grad_aev.shape[1] == self.angular_length
+
+        grad_coords = torch.autograd.grad(self._aev_angular, self._coordinates, grad_aev, retain_graph=True)[0]
+
+        return grad_coords
+
     def forward(self, species_coordinates, cell=None, pbc=None):
 
         species_, coordinates_ = species_coordinates
@@ -191,16 +215,33 @@ class AEVComputer2(AEVComputer):
 
         # Compute AEV components
         radial_aev = self.compute_radial_aev(distances)
+        self._aev_radial = radial_aev
         angular_aev = self.compute_angular_aev(distances, vectors)
+        self._aev_angular = angular_aev
 
         # Merge AEV components
         aev = torch.cat([radial_aev, angular_aev], dim=1)
-        self._aevs = aev.reshape((1, num_atoms, self.aev_length))
+        aev = aev.reshape((1, num_atoms, self.aev_length))
 
-        return SpeciesAEV(species_, self._aevs)
+        return SpeciesAEV(species_, aev)
 
     def backward(self, grad_aevs):
 
-        grad_coords = torch.autograd.grad(self._aevs, self._coordinates, grad_aevs, retain_graph=True)[0]
+        num_atoms = int(self._coordinates.shape[1])
+
+        assert len(grad_aevs.shape) == 3
+        assert grad_aevs.shape[0] == 1
+        assert grad_aevs.shape[1] == num_atoms
+        assert grad_aevs.shape[2] == self.aev_length
+
+        grad_aev_radial, grad_aev_angular = torch.split(grad_aevs[0], [self.radial_length, self.angular_length], dim=1)
+
+        # Compute the gradient of AEV components
+        grad_coords_radial = self.compute_grad_coords_radial(grad_aev_radial)
+        grad_coords_angular = self.compute_grad_coords_angular(grad_aev_angular)
+
+        # Sum the gradients of AEV components
+        grad_coords = grad_coords_radial + grad_coords_angular
+        grad_coords.reshape((1, num_atoms, 3))
 
         return grad_coords
