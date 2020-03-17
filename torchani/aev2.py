@@ -77,9 +77,12 @@ class AEVComputer2(AEVComputer):
         ShfR = self.ShfR.reshape(16)
         terms = 0.25 * torch.exp(-EtaR * (distances - ShfR) ** 2) * cutoff
 
+        self._aev_radial_terms = terms
+
         # Filter self-interaction terms
+        self._aev_radial_valid = distances != 0.0
         zero = torch.tensor([0], dtype=terms.dtype, device=terms.device)
-        terms = torch.where(distances == 0.0, zero, terms)
+        terms = torch.where(self._aev_radial_valid, terms, zero)
 
         # Compute radial AEV
         terms = terms.reshape(num_atoms, num_atoms * self.radial_sublength)
@@ -95,7 +98,15 @@ class AEVComputer2(AEVComputer):
         assert grad_aev.shape[0] == num_atoms
         assert grad_aev.shape[1] == self.radial_length
 
-        grad_coords = torch.autograd.grad(self._aev_radial, self._coordinates, grad_aev, retain_graph=True)[0]
+        # Compute the gradient of radial AEV
+        grad_terms = torch.matmul(grad_aev, self.radial_mapping.t())
+        grad_terms = grad_terms.reshape((num_atoms, num_atoms, self.radial_sublength))
+
+        # Filter the gradient of self-interaction terms
+        zero = torch.tensor([0], dtype=grad_terms.dtype, device=grad_terms.device)
+        grad_terms = torch.where(self._aev_radial_valid, grad_terms, zero)
+
+        grad_coords = torch.autograd.grad(self._aev_radial_terms, self._coordinates, grad_terms, retain_graph=True)[0]
 
         return grad_coords
 
