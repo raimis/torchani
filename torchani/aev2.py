@@ -87,7 +87,9 @@ class AEVComputer2(AEVComputer):
         assert grad_terms.shape[1] == num_atoms
         assert grad_terms.shape[2] == self.radial_sublength
 
-        grad_coords = torch.autograd.grad(self._aev_radial_terms, self._coordinates, grad_terms, retain_graph=True)[0]
+        grad_dists = torch.autograd.grad(self._aev_radial_terms, self._distances, grad_terms, retain_graph=True)[0]
+        grad_vecs = torch.autograd.grad(self._distances, self._vectors, grad_dists, retain_graph=True)[0]
+        grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
 
         return grad_coords
 
@@ -101,7 +103,9 @@ class AEVComputer2(AEVComputer):
         assert grad_terms.shape[2] == self.radial_sublength
 
         scale = self._ave_radial_scale.repeat_interleave(self.radial_sublength, dim=2)
-        grad_coords = torch.autograd.grad(scale, self._coordinates, grad_terms, retain_graph=True)[0]
+        grad_dists = torch.autograd.grad(scale, self._distances, grad_terms, retain_graph=True)[0]
+        grad_vecs = torch.autograd.grad(self._distances, self._vectors, grad_dists, retain_graph=True)[0]
+        grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
 
         return grad_coords
 
@@ -263,7 +267,12 @@ class AEVComputer2(AEVComputer):
         assert grad_terms.shape[2] == num_atoms
         assert grad_terms.shape[3] == self.angular_sublength
 
-        grad_coords = torch.autograd.grad(self._aev_angular_terms, self._coordinates, grad_terms, retain_graph=True)[0]
+        grad_vecs = torch.autograd.grad(self._aev_angular_terms, self._vectors, grad_terms, retain_graph=True)[0]
+        grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
+
+        #grad_dists = torch.autograd.grad(self._aev_angular_terms, self._distances, grad_terms, retain_graph=True)[0]
+        #grad_vecs = torch.autograd.grad(self._distances, self._vectors, grad_dists, retain_graph=True)[0]
+        #grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
 
         return grad_coords
 
@@ -278,7 +287,9 @@ class AEVComputer2(AEVComputer):
         assert grad_terms.shape[3] == self.angular_sublength
 
         scale = self._aev_angular_scale.repeat_interleave(self.angular_sublength, dim=3)
-        grad_coords = torch.autograd.grad(scale, self._coordinates, grad_terms, retain_graph=True)[0]
+        grad_dists = torch.autograd.grad(scale, self._distances, grad_terms, retain_graph=True)[0]
+        grad_vecs = torch.autograd.grad(self._distances, self._vectors, grad_dists, retain_graph=True)[0]    
+        grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
 
         return grad_coords
 
@@ -331,6 +342,8 @@ class AEVComputer2(AEVComputer):
         # Compute vector and distance matrices
         vectors = coordinates.reshape((num_atoms, 1, 3)) - coordinates.reshape((1, num_atoms, 3))
         distances = vectors.norm(2, dim=2)
+        self._vectors = vectors
+        self._distances = distances
 
         # Compute AEV components
         radial_aev = self.compute_radial_aev(distances)
@@ -355,9 +368,8 @@ class AEVComputer2(AEVComputer):
         grad_aev_radial, grad_aev_angular = torch.split(grad_aevs[0], (self.radial_length, self.angular_length), dim=1)
 
         # Compute the gradient of AEV components
-        grad_coords_radial = self.compute_grad_coords_radial(grad_aev_radial)
-        grad_coords_angular = self.compute_grad_coords_angular(grad_aev_angular)
-        grad_coords = grad_coords_radial + grad_coords_angular
+        grad_coords = self.compute_grad_coords_radial(grad_aev_radial) +\
+                      self.compute_grad_coords_angular(grad_aev_angular)
         grad_coords.reshape((1, num_atoms, 3))
 
         return grad_coords
