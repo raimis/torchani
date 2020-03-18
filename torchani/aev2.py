@@ -74,7 +74,9 @@ class AEVComputer2(AEVComputer):
         ShfR = self.ShfR.reshape(16)
 
         # Compute radial terms
-        terms = 0.25 * torch.exp(-EtaR * (distances - ShfR) ** 2)
+        self._radial_centers = distances - ShfR
+        self._radial_exponents = -EtaR * self._radial_centers ** 2
+        terms = 0.25 * torch.exp(self._radial_exponents)
 
         return terms
 
@@ -87,11 +89,11 @@ class AEVComputer2(AEVComputer):
         assert grad_terms.shape[1] == num_atoms
         assert grad_terms.shape[2] == self.radial_sublength
 
-        grad_dists = torch.autograd.grad(self._aev_radial_terms, self._distances, grad_terms, retain_graph=True)[0]
-        grad_vecs = torch.autograd.grad(self._distances, self._vectors, grad_dists, retain_graph=True)[0]
-        grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
+        grad_exps = self._aev_radial_terms * grad_terms
+        grad_cents = -2 * float(self.EtaR) * self._radial_centers * grad_exps
+        grad_dists = grad_cents.sum(2)
 
-        return grad_coords
+        return grad_dists
 
     def compute_grad_radial_scale(self, grad_terms):
 
@@ -103,11 +105,10 @@ class AEVComputer2(AEVComputer):
         assert grad_terms.shape[2] == self.radial_sublength
 
         scale = self._ave_radial_scale.repeat_interleave(self.radial_sublength, dim=2)
-        grad_dists = torch.autograd.grad(scale, self._distances, grad_terms, retain_graph=True)[0]
-        grad_vecs = torch.autograd.grad(self._distances, self._vectors, grad_dists, retain_graph=True)[0]
-        grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
 
-        return grad_coords
+        grad_dists = torch.autograd.grad(scale, self._distances, grad_terms, retain_graph=True)[0]
+
+        return grad_dists
 
     def compute_radial_aev(self, distances):
 
@@ -153,8 +154,18 @@ class AEVComputer2(AEVComputer):
         grad_terms = torch.where(self._aev_radial_valid, grad_terms, zero)
 
         # Compte the gradient of scaling
-        grad_coords = self.compute_grad_radial_terms(self._ave_radial_scale * grad_terms) +\
-                      self.compute_grad_radial_scale(self._aev_radial_terms * grad_terms)
+        grad_dists_terms = self.compute_grad_radial_terms(self._ave_radial_scale * grad_terms)
+        grad_vecs_terms = torch.autograd.grad(self._distances, self._vectors, grad_dists_terms, retain_graph=True)[0]
+        grad_coords_terms = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs_terms, retain_graph=True)[0]
+
+        grad_dists_scale = self.compute_grad_radial_scale(self._aev_radial_terms * grad_terms)
+        grad_vecs_scale = torch.autograd.grad(self._distances, self._vectors, grad_dists_scale, retain_graph=True)[0]
+        grad_coords_scale = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs_scale, retain_graph=True)[0]
+
+        #grad_vecs = grad_vecs_terms + grad_vecs_scale
+        #grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
+
+        grad_coords = grad_coords_terms + grad_coords_scale
 
         return grad_coords
 
