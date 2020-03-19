@@ -183,26 +183,20 @@ class AEVComputer2(AEVComputer):
         assert vectors.shape[2] == 3
 
         # Compute scaling
-        dist1 = distances.reshape((num_atoms, 1, num_atoms, 1, 1))
-        dist2 = distances.reshape((num_atoms, num_atoms, 1, 1, 1))
+        dist1 = distances.reshape((num_atoms, 1, num_atoms))
+        dist2 = distances.reshape((num_atoms, num_atoms, 1))
         epsilon = torch.tensor(1e-38, dtype=dist1.dtype, device=dist1.device)
         self._angles_scale = 0.95/torch.max(dist1 * dist2, epsilon)
 
         # Compute dot product
-        vec1 = vectors.reshape((num_atoms, 1, num_atoms, 1, 3))
-        vec2 = vectors.reshape((num_atoms, num_atoms, 1, 1, 3))
+        vec1 = vectors.reshape((num_atoms, 1, num_atoms, 3))
+        vec2 = vectors.reshape((num_atoms, num_atoms, 1, 3))
         vec_prod = vec1 * vec2
-        self._angles_dot_prod = torch.sum(vec_prod, dim=4, keepdim=True)
+        self._angles_dot_prod = vec_prod.sum(3)
 
         # Compute angles
         self._angular_cosines =  self._angles_scale * self._angles_dot_prod
         angles = torch.acos(self._angular_cosines)
-
-        self._dist1 = dist1
-        self._dist2 = dist2
-        self._vec1 = vec1
-        self._vec2 = vec2
-        self._angles_vec_prod = vec_prod
 
         return angles
 
@@ -210,26 +204,32 @@ class AEVComputer2(AEVComputer):
 
         num_atoms = int(self._coordinates.shape[1])
 
-        assert len(grad_angles.shape) == 5
+        assert len(grad_angles.shape) == 3
         assert grad_angles.shape[0] == num_atoms
         assert grad_angles.shape[1] == num_atoms
         assert grad_angles.shape[2] == num_atoms
-        assert grad_angles.shape[3] == 1
-        assert grad_angles.shape[3] == 1
 
+        # Compute the gradients of cosines
         grad_cosines = -1/torch.sqrt(1 - self._angular_cosines ** 2) * grad_angles
-
         grad_cosine_scale = self._angles_dot_prod * grad_cosines
         grad_cosine_dot_prod = self._angles_scale * grad_cosines
 
-        grad_vec_scale = torch.autograd.grad(self._angles_scale, self._vectors, grad_cosine_scale, retain_graph=True)[0]
+        dist1 = self._distances.reshape((num_atoms, 1, num_atoms, 1))
+        dist2 = self._distances.reshape((num_atoms, num_atoms, 1, 1))
 
-        grad_vec_prod = grad_cosine_dot_prod.repeat_interleave(3, dim=4)
-        grad_vec_dot_prod = torch.autograd.grad(self._angles_vec_prod, self._vectors, grad_vec_prod, retain_graph=True)[0]
+        # Compute the gradients of scales
+        grad_vecs_scale = torch.autograd.grad(self._angles_scale, self._vectors, grad_cosine_scale, retain_graph=True)[0]
 
-        grad_vec = grad_vec_scale + grad_vec_dot_prod
+        # Compute the gradient of dot products
+        vec1 = self._vectors.reshape((num_atoms, 1, num_atoms, 3))
+        vec2 = self._vectors.reshape((num_atoms, num_atoms, 1, 3))
+        grad_cosine_dot_prod = grad_cosine_dot_prod.reshape((num_atoms, num_atoms, num_atoms, 1))
+        grad_vecs_vec1 = torch.sum(vec2 * grad_cosine_dot_prod, 1)
+        grad_vecs_vec2 = torch.sum(vec1 * grad_cosine_dot_prod, 2)
 
-        return grad_vec
+        grad_vecs = grad_vecs_scale + (grad_vecs_vec1 + grad_vecs_vec2)
+
+        return grad_vecs
 
     def compute_angular_terms(self, distances, vectors):
 
@@ -270,8 +270,8 @@ class AEVComputer2(AEVComputer):
         ShfA = self.ShfA.reshape((4, 1))
 
         # Computer factor1
-        self._angles = self.compute_angles(distances, vectors)
-        self._angular_factor1_center = self._angles - ShfZ
+        angles = self.compute_angles(distances, vectors).reshape((num_atoms, num_atoms, num_atoms, 1, 1))
+        self._angular_factor1_center = angles - ShfZ
         self._angular_factor1_base = 0.5 * (1 + torch.cos(self._angular_factor1_center))
         self._angular_factor1 = self._angular_factor1_base ** Zeta
 
@@ -342,7 +342,7 @@ class AEVComputer2(AEVComputer):
         Zeta = int(self.Zeta)
         grad_base_factor1 = Zeta * self._angular_factor1_base ** (Zeta - 1) * grad_terms_factor1
         grad_center_factor1 = -0.5 * torch.sin(self._angular_factor1_center) * grad_base_factor1
-        grad_angles = grad_center_factor1.sum((3, 4), keepdim=True)
+        grad_angles = grad_center_factor1.sum((3, 4))
         grad_vecs_factor1 = self.compute_grad_angles(grad_angles)
 
         # Compute the gradient of factor2
