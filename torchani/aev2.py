@@ -136,7 +136,7 @@ class AEVComputer2(AEVComputer):
 
         return radial_aev
 
-    def compute_grad_coords_radial(self, grad_aev):
+    def compute_grad_radial(self, grad_aev):
 
         num_atoms = int(self._coordinates.shape[1])
 
@@ -154,19 +154,12 @@ class AEVComputer2(AEVComputer):
 
         # Compte the gradient of scaling
         grad_dists_terms = self.compute_grad_radial_terms(self._ave_radial_scale * grad_terms)
-        grad_vecs_terms = torch.autograd.grad(self._distances, self._vectors, grad_dists_terms, retain_graph=True)[0]
-        grad_coords_terms = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs_terms, retain_graph=True)[0]
-
         grad_dists_scale = self.compute_grad_radial_scale(self._aev_radial_terms * grad_terms)
-        grad_vecs_scale = torch.autograd.grad(self._distances, self._vectors, grad_dists_scale, retain_graph=True)[0]
-        grad_coords_scale = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs_scale, retain_graph=True)[0]
+        grad_dists = grad_dists_terms + grad_dists_scale
 
-        #grad_vecs = grad_vecs_terms + grad_vecs_scale
-        #grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
+        grad_vecs = torch.autograd.grad(self._distances, self._vectors, grad_dists, retain_graph=True)[0]
 
-        grad_coords = grad_coords_terms + grad_coords_scale
-
-        return grad_coords
+        return grad_vecs
 
     def compute_angles(self, distances, vectors):
 
@@ -359,11 +352,8 @@ class AEVComputer2(AEVComputer):
         grad_mean_factor2 = grad_center_factor2.sum((3, 4))
 
         # Compute the gradient of mean distances
-        grad_dist1 = grad_mean_factor2.sum(1)
-        grad_dist2 = grad_mean_factor2.sum(2)
-        grad_vecs_dist1 = torch.autograd.grad(self._distances, self._vectors, grad_dist1, retain_graph=True)[0]
-        grad_vecs_dist2 = torch.autograd.grad(self._distances, self._vectors, grad_dist2, retain_graph=True)[0] 
-        grad_vecs_factor2 = 0.5 * (grad_vecs_dist1 + grad_vecs_dist2)
+        grad_dists_factor2 = 0.5 * (grad_mean_factor2.sum(1) + grad_mean_factor2.sum(2))
+        grad_vecs_factor2 = torch.autograd.grad(self._distances, self._vectors, grad_dists_factor2, retain_graph=True)[0]
 
         grad_vecs = grad_vecs_factor1 + grad_vecs_factor2
 
@@ -384,7 +374,7 @@ class AEVComputer2(AEVComputer):
 
         return grad_dists
 
-    def compute_grad_coords_angular(self, grad_aev):
+    def compute_grad_angular(self, grad_aev):
 
         num_atoms = int(self._coordinates.shape[1])
 
@@ -402,15 +392,11 @@ class AEVComputer2(AEVComputer):
 
         # Compte the gradient of scaling
         grad_vecs_terms = self.compute_grad_angular_terms(self._aev_angular_scale * grad_terms)
-        grad_coords_terms = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs_terms, retain_graph=True)[0]
-
         grad_dists_scale = self.compute_grad_angular_scale(self._aev_angular_terms * grad_terms)
         grad_vecs_scale = torch.autograd.grad(self._distances, self._vectors, grad_dists_scale, retain_graph=True)[0]
-        grad_coords_scale = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs_scale, retain_graph=True)[0]
+        grad_vecs = grad_vecs_terms + grad_vecs_scale
 
-        grad_coords = grad_coords_terms + grad_coords_scale
-
-        return grad_coords
+        return grad_vecs
 
     def forward(self, species_coordinates, cell=None, pbc=None):
 
@@ -465,8 +451,11 @@ class AEVComputer2(AEVComputer):
         grad_aev_radial, grad_aev_angular = torch.split(grad_aevs[0], (self.radial_length, self.angular_length), dim=1)
 
         # Compute the gradient of AEV components
-        grad_coords = self.compute_grad_coords_radial(grad_aev_radial) +\
-                      self.compute_grad_coords_angular(grad_aev_angular)
+        grad_vecs = self.compute_grad_radial(grad_aev_radial) +\
+                      self.compute_grad_angular(grad_aev_angular)
+
+        grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
+
         grad_coords.reshape((1, num_atoms, 3))
 
         return grad_coords
