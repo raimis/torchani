@@ -475,10 +475,10 @@ class AEVComputer2(AEVComputer):
 
         # Compute the gradient of AEV components
         grad_vecs = self.compute_grad_radial(grad_aev_radial) +\
-                      self.compute_grad_angular(grad_aev_angular)
+                    self.compute_grad_angular(grad_aev_angular)
 
-        grad_coords = torch.autograd.grad(self._vectors, self._coordinates, grad_vecs, retain_graph=True)[0]
-
-        grad_coords.reshape((1, num_atoms, 3))
+        # Compute the gradient of vectors
+        grad_coords = grad_vecs.sum(1) - grad_vecs.sum(0)
+        grad_coords = grad_coords.reshape((1, num_atoms, 3))
 
         return grad_coords
