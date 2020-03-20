@@ -9,15 +9,15 @@ class AEVComputer2(AEVComputer):
     def __init__(self, **args):
         super().__init__(**args)
 
-    def compute_cutoff(self, distances, cutoff):
+    def compute_scale(self, distances, cutoff):
 
         assert type(cutoff) is float
 
-        value = 0.5 * torch.cos(distances * (np.pi / cutoff)) + 0.5
-        zero = torch.tensor([0], dtype=value.dtype, device=value.device)
-        value = torch.where(distances < cutoff, value, zero)
+        scale = 0.5 * torch.cos(distances * (np.pi / cutoff)) + 0.5
+        zero = torch.tensor([0], dtype=scale.dtype, device=scale.device)
+        scale = torch.where(distances < cutoff, scale, zero)
 
-        return value
+        return scale
 
     def construct_radial_mapping(self, species):
 
@@ -307,7 +307,7 @@ class AEVComputer2(AEVComputer):
         self._aev_angular_terms = self.compute_angular_terms(distances, vectors)
 
         # Scale terms
-        self._aev_angular_scale = self.compute_cutoff(distances, self.Rca)
+        self._aev_angular_scale = self.compute_scale(distances, self.Rca)
         self._aev_angular_scale = self._aev_angular_scale.reshape((num_atoms, 1, num_atoms, 1)) *\
                                   self._aev_angular_scale.reshape((num_atoms, num_atoms, 1, 1))
         terms = self._aev_angular_terms * self._aev_angular_scale
