@@ -9,15 +9,72 @@ class AEVComputer2(AEVComputer):
     def __init__(self, **args):
         super().__init__(**args)
 
-    def compute_scale(self, distances, cutoff):
+        self._scale = {}
+        self._scale_cuts = {}
+        self._scale_dists = {}
+        self._scale_valid = {}
 
-        assert type(cutoff) is float
+    def compute_scale(self, distances, cutoff, numdim):
 
-        scale = 0.5 * torch.cos(distances * (np.pi / cutoff)) + 0.5
-        zero = torch.tensor([0], dtype=scale.dtype, device=scale.device)
-        scale = torch.where(distances < cutoff, scale, zero)
+        num_atoms = int(self._coordinates.shape[1])
+
+        assert len(distances.shape) == 2
+        assert distances.shape[0] == num_atoms
+        assert distances.shape[1] == num_atoms
+
+        cutoff = float(cutoff)
+
+        # Compute scaling
+        self._scale_dists[cutoff] = distances * (np.pi / cutoff)
+        scale2 = 0.5 * torch.cos(self._scale_dists[cutoff]) + 0.5
+
+        # Impose cutoff
+        self._scale_valid[cutoff] = distances < cutoff
+        zero = torch.tensor([0], dtype=scale2.dtype, device=scale2.device)
+        self._scale_cuts[cutoff] = torch.where(self._scale_valid[cutoff], scale2, zero)
+
+        if numdim == 3:
+            scale = self._scale_cuts[cutoff].reshape((num_atoms, num_atoms, 1))
+        elif numdim == 4:
+            scale = self._scale_cuts[cutoff].reshape((num_atoms, 1, num_atoms, 1)) *\
+                    self._scale_cuts[cutoff].reshape((num_atoms, num_atoms, 1, 1))
+        else:
+            assert False
 
         return scale
+
+    def compute_grad_scale(self, grad_scale, cutoff):
+
+        num_atoms = int(self._coordinates.shape[1])
+
+        cutoff = float(cutoff)
+
+        assert grad_scale.shape[0] == num_atoms
+        assert grad_scale.shape[1] == num_atoms
+
+        if len(grad_scale.shape) == 3:
+            assert grad_scale.shape[2] == self.radial_sublength
+
+            grad_scale_cuts = grad_scale.sum(2)
+
+        elif len(grad_scale.shape) == 4:
+            assert grad_scale.shape[2] == num_atoms
+            assert grad_scale.shape[3] == self.angular_sublength
+
+            scale1 = self._scale_cuts[cutoff].reshape((num_atoms, 1, num_atoms, 1))
+            scale2 = self._scale_cuts[cutoff].reshape((num_atoms, num_atoms, 1, 1))
+            grad_scale_cut1 = torch.sum(scale2 * grad_scale, (1, 3))
+            grad_scale_cut2 = torch.sum(scale1 * grad_scale, (2, 3))
+            grad_scale_cuts = grad_scale_cut1 + grad_scale_cut2
+
+        else:
+            assert False
+
+        zero = torch.tensor([0], dtype=grad_scale.dtype, device=grad_scale.device)
+        grad_scale2 = torch.where(self._scale_valid[cutoff], grad_scale_cuts, zero)
+        grad_dists = -0.5 * (np.pi / cutoff) * torch.sin(self._scale_dists[cutoff]) * grad_scale2
+
+        return grad_dists
 
     def construct_radial_mapping(self, species):
 
@@ -59,10 +116,9 @@ class AEVComputer2(AEVComputer):
 
         num_atoms = int(self._coordinates.shape[1])
 
-        assert len(distances.shape) == 3
+        assert len(distances.shape) == 2
         assert distances.shape[0] == num_atoms
         assert distances.shape[1] == num_atoms
-        assert distances.shape[2] == 1
 
         assert len(self.EtaR.shape) == 2
         assert self.EtaR.shape[0] == 1
@@ -74,6 +130,7 @@ class AEVComputer2(AEVComputer):
         ShfR = self.ShfR.reshape(16)
 
         # Compute radial terms
+        distances = distances.reshape((num_atoms, num_atoms, 1))
         self._radial_centers = distances - ShfR
         self._radial_exponents = -EtaR * self._radial_centers ** 2
         terms = 0.25 * torch.exp(self._radial_exponents)
@@ -95,20 +152,6 @@ class AEVComputer2(AEVComputer):
 
         return grad_dists
 
-    def compute_grad_radial_scale(self, grad_terms):
-
-        num_atoms = int(self._coordinates.shape[1])
-
-        assert len(grad_terms.shape) == 3
-        assert grad_terms.shape[0] == num_atoms
-        assert grad_terms.shape[1] == num_atoms
-        assert grad_terms.shape[2] == self.radial_sublength
-
-        scale = self._ave_radial_scale.repeat_interleave(self.radial_sublength, dim=2)
-        grad_dists = torch.autograd.grad(scale, self._distances, grad_terms, retain_graph=True)[0]
-
-        return grad_dists
-
     def compute_radial_aev(self, distances):
 
         num_atoms = int(self._coordinates.shape[1])
@@ -118,15 +161,12 @@ class AEVComputer2(AEVComputer):
         assert distances.shape[1] == num_atoms
 
         # Compute radial terms
-        distances = distances.reshape((num_atoms, num_atoms, 1))
         self._aev_radial_terms = self.compute_radial_terms(distances)
-
-        # Scale terms
-        self._ave_radial_scale = self.compute_scale(distances, self.Rcr)
-        terms = self._aev_radial_terms * self._ave_radial_scale
+        self._scale[self.Rcr] = self.compute_scale(distances, self.Rcr, numdim=3)
+        terms = self._aev_radial_terms * self._scale[self.Rcr]
 
         # Filter self-interaction terms
-        self._aev_radial_valid = distances != 0.0
+        self._aev_radial_valid = distances.reshape((num_atoms, num_atoms, 1)) != 0.0
         zero = torch.tensor([0], dtype=terms.dtype, device=terms.device)
         terms = torch.where(self._aev_radial_valid, terms, zero)
 
@@ -153,8 +193,8 @@ class AEVComputer2(AEVComputer):
         grad_terms = torch.where(self._aev_radial_valid, grad_terms, zero)
 
         # Compte the gradient of scaling
-        grad_dists_terms = self.compute_grad_radial_terms(self._ave_radial_scale * grad_terms)
-        grad_dists_scale = self.compute_grad_radial_scale(self._aev_radial_terms * grad_terms)
+        grad_dists_terms = self.compute_grad_radial_terms(self._scale[self.Rcr] * grad_terms)
+        grad_dists_scale = self.compute_grad_scale(self._aev_radial_terms * grad_terms, self.Rcr)
         grad_dists = grad_dists_terms + grad_dists_scale
 
         grad_vecs = torch.autograd.grad(self._distances, self._vectors, grad_dists, retain_graph=True)[0]
@@ -307,10 +347,8 @@ class AEVComputer2(AEVComputer):
         self._aev_angular_terms = self.compute_angular_terms(distances, vectors)
 
         # Scale terms
-        self._aev_angular_scale = self.compute_scale(distances, self.Rca)
-        self._aev_angular_scale = self._aev_angular_scale.reshape((num_atoms, 1, num_atoms, 1)) *\
-                                  self._aev_angular_scale.reshape((num_atoms, num_atoms, 1, 1))
-        terms = self._aev_angular_terms * self._aev_angular_scale
+        self._scale[self.Rca] = self.compute_scale(distances, self.Rca, numdim=4)
+        terms = self._aev_angular_terms * self._scale[self.Rca]
 
         # Filter self-interaction terms
         self._aev_angular_valid = (distances.reshape((1, num_atoms, num_atoms, 1)) != 0.0) &\
@@ -359,21 +397,6 @@ class AEVComputer2(AEVComputer):
 
         return grad_vecs
 
-    def compute_grad_angular_scale(self, grad_terms):
-
-        num_atoms = int(self._coordinates.shape[1])
-
-        assert len(grad_terms.shape) == 4
-        assert grad_terms.shape[0] == num_atoms
-        assert grad_terms.shape[1] == num_atoms
-        assert grad_terms.shape[2] == num_atoms
-        assert grad_terms.shape[3] == self.angular_sublength
-
-        scale = self._aev_angular_scale.repeat_interleave(self.angular_sublength, dim=3)
-        grad_dists = torch.autograd.grad(scale, self._distances, grad_terms, retain_graph=True)[0]
-
-        return grad_dists
-
     def compute_grad_angular(self, grad_aev):
 
         num_atoms = int(self._coordinates.shape[1])
@@ -391,8 +414,8 @@ class AEVComputer2(AEVComputer):
         grad_terms = torch.where(self._aev_angular_valid, grad_terms, zero)
 
         # Compte the gradient of scaling
-        grad_vecs_terms = self.compute_grad_angular_terms(self._aev_angular_scale * grad_terms)
-        grad_dists_scale = self.compute_grad_angular_scale(self._aev_angular_terms * grad_terms)
+        grad_vecs_terms = self.compute_grad_angular_terms(self._scale[self.Rca] * grad_terms)
+        grad_dists_scale = self.compute_grad_scale(self._aev_angular_terms * grad_terms, self.Rca)
         grad_vecs_scale = torch.autograd.grad(self._distances, self._vectors, grad_dists_scale, retain_graph=True)[0]
         grad_vecs = grad_vecs_terms + grad_vecs_scale
 
