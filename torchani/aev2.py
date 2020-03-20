@@ -105,7 +105,6 @@ class AEVComputer2(AEVComputer):
         assert grad_terms.shape[2] == self.radial_sublength
 
         scale = self._ave_radial_scale.repeat_interleave(self.radial_sublength, dim=2)
-
         grad_dists = torch.autograd.grad(scale, self._distances, grad_terms, retain_graph=True)[0]
 
         return grad_dists
@@ -183,15 +182,17 @@ class AEVComputer2(AEVComputer):
         assert vectors.shape[2] == 3
 
         # Compute scaling
-        dist1 = distances.reshape((num_atoms, 1, num_atoms))
-        dist2 = distances.reshape((num_atoms, num_atoms, 1))
-        epsilon = torch.tensor(1e-38, dtype=dist1.dtype, device=dist1.device)
-        self._angles_scale = 0.95/torch.max(dist1 * dist2, epsilon)
+        dist12 = distances.reshape((num_atoms, 1, num_atoms)) *\
+                 distances.reshape((num_atoms, num_atoms, 1))
+
+        self._angles_valid = torch.abs(dist12) > 0
+        one = torch.tensor([1], dtype=dist12.dtype, device=dist12.device) # Has to be non-zero
+        self._angles_dist12 = torch.where(self._angles_valid, dist12, one)
+        self._angles_scale = 0.95/self._angles_dist12
 
         # Compute dot product
-        vec1 = vectors.reshape((num_atoms, 1, num_atoms, 3))
-        vec2 = vectors.reshape((num_atoms, num_atoms, 1, 3))
-        vec_prod = vec1 * vec2
+        vec_prod = vectors.reshape((num_atoms, 1, num_atoms, 3)) *\
+                   vectors.reshape((num_atoms, num_atoms, 1, 3))
         self._angles_dot_prod = vec_prod.sum(3)
 
         # Compute angles
@@ -210,15 +211,22 @@ class AEVComputer2(AEVComputer):
         assert grad_angles.shape[2] == num_atoms
 
         # Compute the gradients of cosines
-        grad_cosines = -1/torch.sqrt(1 - self._angular_cosines ** 2) * grad_angles
+        grad_cosines = -1 / torch.sqrt(1 - self._angular_cosines ** 2) * grad_angles
         grad_cosine_scale = self._angles_dot_prod * grad_cosines
         grad_cosine_dot_prod = self._angles_scale * grad_cosines
 
-        dist1 = self._distances.reshape((num_atoms, 1, num_atoms, 1))
-        dist2 = self._distances.reshape((num_atoms, num_atoms, 1, 1))
-
         # Compute the gradients of scales
-        grad_vecs_scale = torch.autograd.grad(self._angles_scale, self._vectors, grad_cosine_scale, retain_graph=True)[0]
+        grad_dists12 = -0.95 / self._angles_dist12 ** 2 * grad_cosine_scale
+        zero = torch.tensor([0], dtype=grad_dists12.dtype, device=grad_dists12.device)
+        grad_dists12 = torch.where(self._angles_valid, grad_dists12, zero)
+
+        dist1 = self._distances.reshape((num_atoms, 1, num_atoms))
+        dist2 = self._distances.reshape((num_atoms, num_atoms, 1))
+        grad_dist_dist1 = torch.sum(dist2 * grad_dists12, 1)
+        grad_dist_dist2 = torch.sum(dist1 * grad_dists12, 2)
+
+        grad_vecs_dist1 = torch.autograd.grad(self._distances, self._vectors, grad_dist_dist1, retain_graph=True)[0]
+        grad_vecs_dist2 = torch.autograd.grad(self._distances, self._vectors, grad_dist_dist2, retain_graph=True)[0]
 
         # Compute the gradient of dot products
         vec1 = self._vectors.reshape((num_atoms, 1, num_atoms, 3))
@@ -227,7 +235,7 @@ class AEVComputer2(AEVComputer):
         grad_vecs_vec1 = torch.sum(vec2 * grad_cosine_dot_prod, 1)
         grad_vecs_vec2 = torch.sum(vec1 * grad_cosine_dot_prod, 2)
 
-        grad_vecs = grad_vecs_scale + (grad_vecs_vec1 + grad_vecs_vec2)
+        grad_vecs = (grad_vecs_dist1 + grad_vecs_dist2) + (grad_vecs_vec1 + grad_vecs_vec2)
 
         return grad_vecs
 
