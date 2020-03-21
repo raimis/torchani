@@ -76,6 +76,24 @@ class AEVComputer2(AEVComputer):
 
         return grad_dists
 
+    def compute_grad_dists(self, grad_dists):
+
+        num_atoms = int(self._coordinates.shape[1])
+
+        assert len(grad_dists.shape) == 2
+        assert grad_dists.shape[0] == num_atoms
+        assert grad_dists.shape[1] == num_atoms
+
+        grad_sums = 1 / self._distances * grad_dists
+        grad_squares = grad_sums.reshape((num_atoms, num_atoms, 1))
+        grad_vecs = self._vectors * grad_squares
+
+        dists = self._distances.reshape((num_atoms, num_atoms, 1))
+        zero = torch.tensor([0], dtype=dists.dtype, device=dists.device)
+        grad_vecs = torch.where(dists > 0, grad_vecs, zero)
+
+        return grad_vecs
+
     def construct_radial_mapping(self, species):
 
         assert len(species.shape) == 1
@@ -196,8 +214,7 @@ class AEVComputer2(AEVComputer):
         grad_dists_terms = self.compute_grad_radial_terms(self._scale[self.Rcr] * grad_terms)
         grad_dists_scale = self.compute_grad_scale(self._aev_radial_terms * grad_terms, self.Rcr)
         grad_dists = grad_dists_terms + grad_dists_scale
-
-        grad_vecs = torch.autograd.grad(self._distances, self._vectors, grad_dists, retain_graph=True)[0]
+        grad_vecs = self.compute_grad_dists(grad_dists)
 
         return grad_vecs
 
@@ -257,9 +274,8 @@ class AEVComputer2(AEVComputer):
         dist2 = self._distances.reshape((num_atoms, num_atoms, 1))
         grad_dist_dist1 = torch.sum(dist2 * grad_dists12, 1)
         grad_dist_dist2 = torch.sum(dist1 * grad_dists12, 2)
-
-        grad_vecs_dist1 = torch.autograd.grad(self._distances, self._vectors, grad_dist_dist1, retain_graph=True)[0]
-        grad_vecs_dist2 = torch.autograd.grad(self._distances, self._vectors, grad_dist_dist2, retain_graph=True)[0]
+        grad_vecs_dist1 = self.compute_grad_dists(grad_dist_dist1)
+        grad_vecs_dist2 = self.compute_grad_dists(grad_dist_dist2)
 
         # Compute the gradient of dot products
         vec1 = self._vectors.reshape((num_atoms, 1, num_atoms, 3))
@@ -391,7 +407,7 @@ class AEVComputer2(AEVComputer):
 
         # Compute the gradient of mean distances
         grad_dists_factor2 = 0.5 * (grad_mean_factor2.sum(1) + grad_mean_factor2.sum(2))
-        grad_vecs_factor2 = torch.autograd.grad(self._distances, self._vectors, grad_dists_factor2, retain_graph=True)[0]
+        grad_vecs_factor2 = self.compute_grad_dists(grad_dists_factor2)
 
         grad_vecs = grad_vecs_factor1 + grad_vecs_factor2
 
@@ -416,7 +432,7 @@ class AEVComputer2(AEVComputer):
         # Compte the gradient of scaling
         grad_vecs_terms = self.compute_grad_angular_terms(self._scale[self.Rca] * grad_terms)
         grad_dists_scale = self.compute_grad_scale(self._aev_angular_terms * grad_terms, self.Rca)
-        grad_vecs_scale = torch.autograd.grad(self._distances, self._vectors, grad_dists_scale, retain_graph=True)[0]
+        grad_vecs_scale = self.compute_grad_dists(grad_dists_scale)
         grad_vecs = grad_vecs_terms + grad_vecs_scale
 
         return grad_vecs
@@ -446,14 +462,12 @@ class AEVComputer2(AEVComputer):
         self.construct_angular_mapping(species)
 
         # Compute vector and distance matrices
-        vectors = coordinates.reshape((num_atoms, 1, 3)) - coordinates.reshape((1, num_atoms, 3))
-        distances = vectors.norm(2, dim=2)
-        self._vectors = vectors
-        self._distances = distances
+        self._vectors = coordinates.reshape((num_atoms, 1, 3)) - coordinates.reshape((1, num_atoms, 3))
+        self._distances = self._vectors.norm(2, dim=2)
 
         # Compute AEV components
-        radial_aev = self.compute_radial_aev(distances)
-        angular_aev = self.compute_angular_aev(distances, vectors)
+        radial_aev = self.compute_radial_aev(self._distances)
+        angular_aev = self.compute_angular_aev(self._distances, self._vectors)
 
         # Merge AEV components
         aev = torch.cat([radial_aev, angular_aev], dim=1)
