@@ -106,14 +106,20 @@ class Ensemble2(Ensemble):
         # vectors = torch.matmul(self.weights_6, vectors) + self.biases_6
         # energy = torch.sum(vectors).reshape(1) / len(self)
 
+        assert np.all(np.sort(species.cpu().numpy())[::-1] == species.cpu().numpy())
+
         aev = aev_.reshape((num_atoms, num_ave))
         energies = []
+        self._vector0 = []
         for i, submodel in enumerate(self):
-            for j, nn in enumerate(self[i].values()):
+            nns = reversed(self[i].values())
+            js = reversed(range(len(self[i])))
+            for j, nn in zip(js, nns):
+                assert len(nn) == 7
                 midx = torch.tensor(np.flatnonzero(species.cpu() == j), device=species.device)
                 if midx.shape[0] > 0:
                     vector = aev.index_select(0, midx)
-                    assert len(nn) == 7
+                    self._vector0.append(vector)
                     vector = torch.matmul(vector, nn[0].weight.t())
                     vector += nn[0].bias
                     vector = celu(vector)
@@ -126,13 +132,25 @@ class Ensemble2(Ensemble):
                     vector = torch.matmul(vector, nn[6].weight.t())
                     vector += nn[6].bias
                     energies.append(vector.flatten())
+        self._energies = energies
         energies = torch.cat(energies)
-        self._energy = torch.sum(energies).reshape(1) / len(self)
+        self._energies2 = energies
+        energy = torch.sum(energies).reshape(1) / len(self)
 
-        return SpeciesEnergies(species_, self._energy)
+        return SpeciesEnergies(species_, energy)
 
     def backward(self):
 
-        grad_aevs = torch.autograd.grad(self._energy, self._aevs, retain_graph=True)[0]
+        num_atoms = int(self._aevs.shape[1])
+        num_aevs = int(self._aevs.shape[2])
+
+        grad_aevs = []
+        for vector0, energy in zip(self._vector0, self._energies):
+            grad = torch.ones_like(energy)
+            grad = torch.autograd.grad(energy, vector0, grad, retain_graph=True)[0]
+            grad_aevs.append(grad)
+        grad_aevs = torch.cat(grad_aevs)
+        grad_aevs = grad_aevs.reshape((1, len(self), num_atoms, num_aevs))
+        grad_aevs = grad_aevs.mean(dim=1)
 
         return grad_aevs
