@@ -29,23 +29,6 @@ class ANIModel2(ANIModel):
 
         return SpeciesEnergies(species, energy)
 
-def pad(tensor, size):
-
-    padded_tensor = torch.zeros(size, dtype=tensor.dtype, device=tensor.device)
-
-    if type(size) is int:
-        assert len(tensor.shape) == 1
-        assert tensor.shape[0] <= size
-        padded_tensor[:tensor.shape[0]] = tensor
-    elif type(size) is tuple and len(size) == 2:
-        assert tensor.shape[0] <= size[0]
-        assert tensor.shape[1] <= size[1]
-        padded_tensor[:tensor.shape[0], :tensor.shape[1]] = tensor
-    else:
-        assert False
-
-    return padded_tensor
-
 def celu(x):
     return 0.1 * torch.nn.functional.elu(10 * x, alpha=1)
 
