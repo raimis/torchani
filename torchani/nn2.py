@@ -3,6 +3,28 @@ import numpy as np
 import torch
 from .nn import ANIModel, Ensemble, SpeciesEnergies
 
+
+class CELU:
+
+    def __init__(self, alpha):
+
+        self._alpha = float(alpha)
+        self._input = None
+        self._output = None
+
+    def forward(self, input):
+
+        self._input = input
+        self._output = 0.1 * torch.nn.functional.elu(10 * self._input, alpha=1)
+
+        return self._output
+
+    def backward(self, grad_output):
+
+        grad_input = torch.autograd.grad(self._output, self._input, grad_output, retain_graph=True)[0]
+
+        return grad_input
+
 class ANIModel2(ANIModel):
 
     def __init__(self, modules):
@@ -45,9 +67,6 @@ def pad(tensor, size):
         assert False
 
     return padded_tensor
-
-def celu(x):
-    return 0.1 * torch.nn.functional.elu(10 * x, alpha=1)
 
 class Ensemble2(Ensemble):
 
@@ -112,15 +131,11 @@ class Ensemble2(Ensemble):
 
         assert np.all(np.sort(species.cpu().numpy())[::-1] == species.cpu().numpy())
 
-        self._vector0 = []
-        self._vector1 = []
-        self._vector2 = []
-        self._vector3 = []
-        self._vector4 = []
-        self._vector5 = []
-        self._vector6 = []
-
         self._nns = []
+        self._celu1 = []
+        self._celu3 = []
+        self._celu5 = []
+
         energies = []
         for i, submodel in enumerate(self):
             nns = reversed(self[i].values())
@@ -130,28 +145,16 @@ class Ensemble2(Ensemble):
                 midx = torch.tensor(np.flatnonzero(species.cpu() == j), device=species.device)
                 if midx.shape[0] > 0:
                     self._nns.append(nn)
-
                     vector0 = aev.index_select(0, midx)
-                    self._vector0.append(vector0)
-
                     vector1 = torch.matmul(vector0, nn[0].weight.t()) + nn[0].bias
-                    self._vector1.append(vector1)
-
-                    vector2 = celu(vector1)
-                    self._vector2.append(vector2)
-
+                    self._celu1.append(CELU(10))
+                    vector2 = self._celu1[-1].forward(vector1)
                     vector3 = torch.matmul(vector2, nn[2].weight.t()) + nn[2].bias
-                    self._vector3.append(vector3)
-
-                    vector4 = celu(vector3)
-                    self._vector4.append(vector4)
-
+                    self._celu3.append(CELU(10))
+                    vector4 = self._celu3[-1].forward(vector3)
                     vector5 = torch.matmul(vector4, nn[4].weight.t()) + nn[4].bias
-                    self._vector5.append(vector5)
-
-                    vector6 = celu(vector5)
-                    self._vector6.append(vector6)
-
+                    self._celu5.append(CELU(10))
+                    vector6 = self._celu5[-1].forward(vector5)
                     vector7 = torch.matmul(vector6, nn[6].weight.t()) + nn[6].bias
                     energies.append(vector7.flatten())
         self._energies = energies
@@ -166,18 +169,18 @@ class Ensemble2(Ensemble):
         num_aevs = int(self._aevs.shape[2])
 
         grad_aevs = []
-        for nn, vec0, vec1, vec2, vec3, vec4, vec5, vec6, energy in zip(
-                self._nns, self._vector0, self._vector1,
-                self._vector2, self._vector3, self._vector4,
-                self._vector5, self._vector6, self._energies):
+        for nn, celu1, celu3, celu5, energy in zip(
+                self._nns,
+                self._celu1, self._celu3, self._celu5,
+                self._energies):
             num_energies = int(energy.shape[0])
             grad_vec7 = torch.ones((num_energies, 1), dtype=energy.dtype, device=energy.device)
             grad_vec6 = torch.matmul(grad_vec7, nn[6].weight)
-            grad_vec5 = torch.autograd.grad(  vec6, vec5, grad_vec6, retain_graph=True)[0]
+            grad_vec5 = celu5.backward(grad_vec6)
             grad_vec4 = torch.matmul(grad_vec5, nn[4].weight)
-            grad_vec3 = torch.autograd.grad(  vec4, vec3, grad_vec4, retain_graph=True)[0]
+            grad_vec3 = celu3.backward(grad_vec4)
             grad_vec2 = torch.matmul(grad_vec3, nn[2].weight)
-            grad_vec1 = torch.autograd.grad(  vec2, vec1, grad_vec2, retain_graph=True)[0]
+            grad_vec1 = celu1.backward(grad_vec2)
             grad_vec0 = torch.matmul(grad_vec1, nn[0].weight)
             grad_aevs.append(grad_vec0)
         grad_aevs = torch.cat(grad_aevs)
