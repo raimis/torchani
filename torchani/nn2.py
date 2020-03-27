@@ -9,19 +9,17 @@ class CELU:
     def __init__(self, alpha):
 
         self._alpha = float(alpha)
-        self._input = None
         self._output = None
 
     def forward(self, input):
 
-        self._input = input
-        self._output = self._alpha * torch.nn.functional.elu(self._input / self._alpha, alpha=1)
+        self._output = self._alpha * torch.nn.functional.elu(input / self._alpha, alpha=1)
 
         return self._output
 
     def backward(self, grad_output):
 
-        grad_input = torch.autograd.grad(self._output, self._input, grad_output, retain_graph=True)[0]
+        grad_input = torch.clamp(self._output / self._alpha + 1, max=1) * grad_output
 
         return grad_input
 
