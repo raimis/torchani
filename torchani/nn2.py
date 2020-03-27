@@ -15,7 +15,7 @@ class CELU:
     def forward(self, input):
 
         self._input = input
-        self._output = 0.1 * torch.nn.functional.elu(10 * self._input, alpha=1)
+        self._output = self._alpha * torch.nn.functional.elu(self._input / self._alpha, alpha=1)
 
         return self._output
 
@@ -94,7 +94,6 @@ class Ensemble2(Ensemble):
 
         species = species_.reshape(num_atoms)
         aev = aev_.reshape((num_atoms, num_ave))
-
 
         # for ilayer, in_size, out_size in [(0, 384, 160), (2, 160, 128), (4, 128, 96), (6, 96, 1)]:
         #     weights, biases = [], []
