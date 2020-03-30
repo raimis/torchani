@@ -11,8 +11,12 @@ import math
 import timeit
 import collections
 import sys
-from ..nn import ANIModel, Ensemble, Gaussian, Sequential
-from ..utils import EnergyShifter, ChemicalSymbolsToInts
+#from ..nn import ANIModel, Ensemble, Gaussian, Sequential
+from ..nn import ANIModel, Gaussian, Sequential
+from ..nn2 import Ensemble2 as Ensemble
+#from ..utils import EnergyShifter, ChemicalSymbolsToInts
+from ..utils import ChemicalSymbolsToInts
+from ..utils import EnergyShifter2 as EnergyShifter
 from ..aev import AEVComputer
 from ..optim import AdamW
 from collections import OrderedDict

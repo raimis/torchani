@@ -33,7 +33,8 @@ from typing import Tuple, Optional
 from pkg_resources import resource_filename
 from . import neurochem
 from .nn import Sequential, SpeciesConverter, SpeciesEnergies
-from .aev import AEVComputer
+#from .aev import AEVComputer
+from .aev2 import AEVComputer2 as AEVComputer
 
 
 class BuiltinNet(torch.nn.Module):
@@ -219,7 +220,7 @@ class BuiltinNet2(BuiltinNet):
         return grad_coords
 
 
-class ANI1x(BuiltinNet):
+class ANI1x(BuiltinNet2):
     """The ANI-1x model as in `ani-1x_8x on GitHub`_ and `Active Learning Paper`_.
 
     The ANI-1x model is an ensemble of 8 networks that was trained using
@@ -238,7 +239,7 @@ class ANI1x(BuiltinNet):
         super().__init__('ani-1x_8x.info', *args, **kwargs)
 
 
-class ANI1ccx(BuiltinNet):
+class ANI1ccx(BuiltinNet2):
     """The ANI-1ccx model as in `ani-1ccx_8x on GitHub`_ and `Transfer Learning Paper`_.
 
     The ANI-1ccx model is an ensemble of 8 networks that was trained
