@@ -313,3 +313,19 @@ def vibrational_analysis(masses, hessian, unit='cm^-1'):
 __all__ = ['pad', 'pad_atomic_properties', 'present_species', 'hessian',
            'vibrational_analysis', 'strip_redundant_padding',
            'ChemicalSymbolsToInts']
+
+
+class EnergyShifter2(EnergyShifter):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, species_energies, cell=None, pbc=None):
+
+        species, energies = species_energies
+
+        #shifted_energies = energies.to(torch.double) + float(self.sae(species))
+        #shifted_energies = energies + float(self.sae(species))
+        shifted_energies = energies
+
+        return SpeciesEnergies(species, shifted_energies)
