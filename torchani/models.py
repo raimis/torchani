@@ -142,7 +142,6 @@ class BuiltinModel(torch.nn.Module):
         species_energies = self.neural_networks(species_aevs)
         return self.energy_shifter(species_energies)
 
-    @torch.jit.export
     def _recast_long_buffers(self):
         self.species_converter.conv_tensor = self.species_converter.conv_tensor.to(dtype=torch.long)
         self.aev_computer.triu_index = self.aev_computer.triu_index.to(dtype=torch.long)
