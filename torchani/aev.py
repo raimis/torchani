@@ -235,7 +235,7 @@ def triple_by_molecule(atom_index12: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     counts = unique_results[-1]
 
     # compute central_atom_index
-    pair_sizes = counts * (counts - 1) // 2
+    pair_sizes = torch.floor(counts * (counts - 1) / 2).long()
     pair_indices = torch.repeat_interleave(pair_sizes)
     central_atom_index = uniqued_central_atom_index.index_select(0, pair_indices)
 
